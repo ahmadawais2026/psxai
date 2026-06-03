@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI-Powered Investment Intelligence for Pakistan Stock Exchange">
+    <title>PSX Advisor — AI-Powered Investment Intelligence</title>
+
+    <!-- Google Fonts: Inter (body) + JetBrains Mono (numbers) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Main Stylesheet -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         ANIMATED BACKGROUND
+         ═══════════════════════════════════════════════════════════ -->
+    <div id="bg-gradient" class="bg-gradient" aria-hidden="true">
+        <div class="bg-orb bg-orb--emerald"></div>
+        <div class="bg-orb bg-orb--cyan"></div>
+        <div class="bg-orb bg-orb--purple"></div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         HEADER
+         ═══════════════════════════════════════════════════════════ -->
+    <header id="app-header" class="app-header">
+        <div class="header-inner container">
+            <div class="header-brand">
+                <div id="logo" class="logo" aria-label="PSX Advisor Logo">
+                    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
+                        <defs>
+                            <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#10b981"/>
+                                <stop offset="100%" stop-color="#06b6d4"/>
+                            </linearGradient>
+                        </defs>
+                        <rect x="2" y="2" width="32" height="32" rx="8" stroke="url(#logoGrad)" stroke-width="2.5" fill="none"/>
+                        <path d="M10 24 L14 16 L18 20 L22 12 L26 18" stroke="url(#logoGrad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        <circle cx="26" cy="18" r="2.5" fill="url(#logoGrad)"/>
+                    </svg>
+                    <h1 class="logo-text">PSX <span class="logo-accent">Advisor</span></h1>
+                </div>
+                <p id="tagline" class="tagline">AI-Powered Investment Intelligence for Pakistan Stock Exchange</p>
+            </div>
+            <div class="header-actions">
+                <button id="btn-portfolio-toggle" class="btn btn-ghost" aria-label="Open portfolio" title="My Portfolio">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                    <span>Portfolio</span>
+                </button>
+                <span id="disclaimer-badge" class="badge badge--disclaimer" title="This tool is for educational and research purposes only. Not financial advice.">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    For Educational Purposes Only
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         MAIN CONTENT
+         ═══════════════════════════════════════════════════════════ -->
+    <main id="app-main" class="app-main container">
+
+        <!-- ─── Search Section ───────────────────────────────── -->
+        <section id="search-section" class="search-section" aria-label="Stock Search">
+            <div class="search-hero">
+                <h2 class="search-title">Analyze any PSX stock</h2>
+                <p class="search-subtitle">Get AI-powered technical, fundamental, sentiment &amp; risk analysis</p>
+            </div>
+            <div id="search-wrapper" class="search-wrapper">
+                <div class="search-input-group">
+                    <svg class="search-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input
+                        id="search-input"
+                        type="text"
+                        class="search-input"
+                        placeholder="Search PSX stocks... (e.g., OGDC, HBL, LUCK)"
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-label="Search PSX stocks"
+                        aria-autocomplete="list"
+                        aria-controls="autocomplete-dropdown"
+                        aria-expanded="false"
+                    >
+                    <button id="btn-search" class="btn btn-primary search-btn" aria-label="Search">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                        <span>Analyze</span>
+                    </button>
+                </div>
+                <!-- Autocomplete Dropdown -->
+                <div id="autocomplete-dropdown" class="autocomplete-dropdown" role="listbox" aria-label="Search suggestions" hidden>
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+            <!-- Recent Searches -->
+            <div id="recent-searches" class="recent-searches" hidden>
+                <span class="recent-label">Recent:</span>
+                <div id="recent-list" class="recent-list">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Analysis Dashboard ───────────────────────────── -->
+        <section id="analysis-section" class="analysis-section" aria-label="Stock Analysis" hidden>
+
+            <!-- Quote Card -->
+            <div id="quote-card" class="quote-card glass-card animate-in">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Agent Status Bar -->
+            <div id="agent-status-bar" class="agent-status-bar" hidden>
+                <div class="agent-status-title">AI Agents Working</div>
+                <div id="agent-steps" class="agent-steps">
+                    <div id="step-technical" class="agent-step" data-status="pending">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Analyzing technicals...</span>
+                    </div>
+                    <div id="step-fundamental" class="agent-step" data-status="pending">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Reviewing fundamentals...</span>
+                    </div>
+                    <div id="step-sentiment" class="agent-step" data-status="pending">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Gauging sentiment...</span>
+                    </div>
+                    <div id="step-risk" class="agent-step" data-status="pending">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Assessing risk...</span>
+                    </div>
+                    <div id="step-debate" class="agent-step" data-status="pending">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Debating bull vs bear...</span>
+                    </div>
+                    <div id="step-recommendation" class="agent-step" data-status="pending">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Generating recommendation...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Agent Analysis Cards Grid -->
+            <div id="agents-grid" class="agents-grid" hidden>
+                <!-- Technical Analysis -->
+                <article id="card-technical" class="agent-card glass-card animate-in" aria-label="Technical Analysis">
+                    <div class="card-header">
+                        <div class="card-icon card-icon--technical">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        </div>
+                        <h3 class="card-title">Technical Analysis</h3>
+                        <span id="badge-technical-trend" class="badge badge--neutral">—</span>
+                    </div>
+                    <div id="content-technical" class="card-body">
+                        <!-- Populated by JS -->
+                    </div>
+                </article>
+
+                <!-- Fundamental Analysis -->
+                <article id="card-fundamental" class="agent-card glass-card animate-in" aria-label="Fundamental Analysis">
+                    <div class="card-header">
+                        <div class="card-icon card-icon--fundamental">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                        </div>
+                        <h3 class="card-title">Fundamental Analysis</h3>
+                        <span id="badge-fundamental-verdict" class="badge badge--neutral">—</span>
+                    </div>
+                    <div id="content-fundamental" class="card-body">
+                        <!-- Populated by JS -->
+                    </div>
+                </article>
+
+                <!-- Sentiment Analysis -->
+                <article id="card-sentiment" class="agent-card glass-card animate-in" aria-label="Sentiment Analysis">
+                    <div class="card-header">
+                        <div class="card-icon card-icon--sentiment">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                        </div>
+                        <h3 class="card-title">Sentiment Analysis</h3>
+                        <span id="badge-sentiment-score" class="badge badge--neutral">—</span>
+                    </div>
+                    <div id="content-sentiment" class="card-body">
+                        <!-- Populated by JS -->
+                    </div>
+                </article>
+
+                <!-- Risk Assessment -->
+                <article id="card-risk" class="agent-card glass-card animate-in" aria-label="Risk Assessment">
+                    <div class="card-header">
+                        <div class="card-icon card-icon--risk">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        </div>
+                        <h3 class="card-title">Risk Assessment</h3>
+                        <span id="badge-risk-level" class="badge badge--neutral">—</span>
+                    </div>
+                    <div id="content-risk" class="card-body">
+                        <!-- Populated by JS -->
+                    </div>
+                </article>
+            </div>
+
+            <!-- Skeleton Loaders (shown during analysis) -->
+            <div id="skeleton-grid" class="agents-grid" hidden>
+                <div class="agent-card glass-card skeleton-card">
+                    <div class="skeleton skeleton--header"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--short"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--medium"></div>
+                </div>
+                <div class="agent-card glass-card skeleton-card">
+                    <div class="skeleton skeleton--header"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--short"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--medium"></div>
+                </div>
+                <div class="agent-card glass-card skeleton-card">
+                    <div class="skeleton skeleton--header"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--short"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--medium"></div>
+                </div>
+                <div class="agent-card glass-card skeleton-card">
+                    <div class="skeleton skeleton--header"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--short"></div>
+                    <div class="skeleton skeleton--line"></div>
+                    <div class="skeleton skeleton--line skeleton--medium"></div>
+                </div>
+            </div>
+
+            <!-- Debate Section -->
+            <div id="debate-section" class="debate-section" hidden>
+                <h3 class="section-heading">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    Bull vs Bear Debate
+                </h3>
+                <div class="debate-grid">
+                    <article id="debate-bull" class="debate-card debate-card--bull glass-card animate-in" aria-label="Bull Case">
+                        <div class="debate-header">
+                            <span class="debate-icon">🐂</span>
+                            <h4 class="debate-title debate-title--bull">Bull Case</h4>
+                        </div>
+                        <div id="debate-bull-content" class="debate-body">
+                            <!-- Populated by JS -->
+                        </div>
+                    </article>
+                    <div class="debate-vs">VS</div>
+                    <article id="debate-bear" class="debate-card debate-card--bear glass-card animate-in" aria-label="Bear Case">
+                        <div class="debate-header">
+                            <span class="debate-icon">🐻</span>
+                            <h4 class="debate-title debate-title--bear">Bear Case</h4>
+                        </div>
+                        <div id="debate-bear-content" class="debate-body">
+                            <!-- Populated by JS -->
+                        </div>
+                    </article>
+                </div>
+            </div>
+
+            <!-- Final Verdict / Recommendation Card -->
+            <div id="verdict-section" class="verdict-section" hidden>
+                <article id="verdict-card" class="verdict-card glass-card animate-in" aria-label="Final Recommendation">
+                    <div class="verdict-glow" aria-hidden="true"></div>
+                    <div class="verdict-header">
+                        <h3 class="verdict-heading">Final Verdict</h3>
+                        <span id="verdict-badge" class="verdict-badge">—</span>
+                    </div>
+                    <div class="verdict-body">
+                        <div class="verdict-metrics">
+                            <!-- Confidence Meter -->
+                            <div id="verdict-confidence" class="verdict-metric">
+                                <div class="confidence-ring">
+                                    <svg viewBox="0 0 100 100" class="confidence-svg">
+                                        <circle cx="50" cy="50" r="42" class="confidence-bg"/>
+                                        <circle id="confidence-circle" cx="50" cy="50" r="42" class="confidence-fill"/>
+                                    </svg>
+                                    <span id="confidence-value" class="confidence-value data-font">—</span>
+                                </div>
+                                <span class="verdict-metric-label">Confidence</span>
+                            </div>
+                            <!-- Price Target -->
+                            <div id="verdict-price-target" class="verdict-metric">
+                                <div class="price-target-display">
+                                    <span class="price-target-label">Target Range</span>
+                                    <div class="price-target-range">
+                                        <span id="price-target-low" class="data-font price-target-value">—</span>
+                                        <span class="price-target-sep">→</span>
+                                        <span id="price-target-high" class="data-font price-target-value">—</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Catalysts & Risks -->
+                        <div class="verdict-details">
+                            <div id="verdict-catalysts" class="verdict-detail-col">
+                                <h4 class="detail-heading detail-heading--bull">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                                    Key Catalysts
+                                </h4>
+                                <ul id="catalysts-list" class="detail-list">
+                                    <!-- Populated by JS -->
+                                </ul>
+                            </div>
+                            <div id="verdict-risks" class="verdict-detail-col">
+                                <h4 class="detail-heading detail-heading--bear">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>
+                                    Key Risks
+                                </h4>
+                                <ul id="risks-list" class="detail-list">
+                                    <!-- Populated by JS -->
+                                </ul>
+                            </div>
+                        </div>
+                        <!-- Position Advice -->
+                        <div id="verdict-position-advice" class="verdict-position-advice" hidden>
+                            <div class="position-advice-inner">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                                <div>
+                                    <span class="position-advice-label">Position-Specific Advice</span>
+                                    <p id="position-advice-text" class="position-advice-text"></p>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Reasoning -->
+                        <div id="verdict-reasoning" class="verdict-reasoning" hidden>
+                            <h4 class="detail-heading">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                                Reasoning
+                            </h4>
+                            <p id="reasoning-text" class="reasoning-text"></p>
+                        </div>
+                    </div>
+                </article>
+            </div>
+
+            <!-- Error Display -->
+            <div id="error-display" class="error-display glass-card" hidden>
+                <div class="error-icon">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                </div>
+                <h3 id="error-title" class="error-title">Analysis Failed</h3>
+                <p id="error-message" class="error-message"></p>
+                <button id="btn-retry" class="btn btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    Retry Analysis
+                </button>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         PORTFOLIO MODAL
+         ═══════════════════════════════════════════════════════════ -->
+    <div id="portfolio-modal" class="modal-overlay" hidden aria-modal="true" role="dialog" aria-label="Portfolio Management">
+        <div class="modal-backdrop" id="modal-backdrop"></div>
+        <aside id="portfolio-panel" class="portfolio-panel glass-card">
+            <div class="panel-header">
+                <h2 class="panel-title">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                    My Portfolio
+                </h2>
+                <button id="btn-portfolio-close" class="btn btn-icon" aria-label="Close portfolio">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+
+            <!-- Add Holding Form -->
+            <form id="add-holding-form" class="add-holding-form" autocomplete="off">
+                <h3 class="form-heading">Add Holding</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="holding-symbol" class="form-label">Symbol</label>
+                        <input id="holding-symbol" type="text" class="form-input" placeholder="e.g. OGDC" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="holding-shares" class="form-label">Shares</label>
+                        <input id="holding-shares" type="number" class="form-input data-font" placeholder="100" min="1" step="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="holding-cost" class="form-label">Avg Cost (PKR)</label>
+                        <input id="holding-cost" type="number" class="form-input data-font" placeholder="120.50" min="0.01" step="0.01" required>
+                    </div>
+                </div>
+                <button id="btn-add-holding" type="submit" class="btn btn-primary btn-full">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Add to Portfolio
+                </button>
+            </form>
+
+            <div class="panel-divider"></div>
+
+            <!-- Portfolio Summary -->
+            <div id="portfolio-summary" class="portfolio-summary" hidden>
+                <div class="summary-row">
+                    <span class="summary-label">Total Value</span>
+                    <span id="portfolio-total-value" class="summary-value data-font">PKR 0</span>
+                </div>
+                <div class="summary-row">
+                    <span class="summary-label">Total P&amp;L</span>
+                    <span id="portfolio-total-pnl" class="summary-value data-font">PKR 0</span>
+                </div>
+                <div class="summary-row">
+                    <span class="summary-label">P&amp;L %</span>
+                    <span id="portfolio-total-pnl-pct" class="summary-value data-font">0.00%</span>
+                </div>
+            </div>
+
+            <!-- Holdings Table -->
+            <div id="portfolio-holdings" class="portfolio-holdings">
+                <div id="portfolio-empty" class="portfolio-empty">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                    <p>No holdings yet</p>
+                    <span class="text-muted">Add stocks to track your portfolio</span>
+                </div>
+                <table id="holdings-table" class="holdings-table" hidden>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th class="text-right">Shares</th>
+                            <th class="text-right">Avg Cost</th>
+                            <th class="text-right">Current</th>
+                            <th class="text-right">P&amp;L</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="holdings-tbody">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </aside>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         DISCLAIMER BANNER
+         ═══════════════════════════════════════════════════════════ -->
+    <footer id="disclaimer-banner" class="disclaimer-banner">
+        <div class="container disclaimer-inner">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <p><strong>Disclaimer:</strong> PSX Advisor provides AI-generated analysis for <em>educational and research purposes only</em>. This is <strong>not financial advice</strong>. Always consult a qualified financial advisor before making investment decisions. Past performance does not guarantee future results.</p>
+        </div>
+    </footer>
+
+    <!-- Main Application Script -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

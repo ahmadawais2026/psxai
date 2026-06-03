@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+data/advisor_cache.db
+data/portfolio.db
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.DS_Store
+Thumbs.db
