@@ -188,9 +188,9 @@ def parse_statement_json(statement_list):
         unit = item.get("unit", "")
         row_dict = {"Metric": label, "Unit": unit}
         
-        # Initialize periods to empty
+        # Initialize periods to empty (use None so pandas saves as numeric/blank instead of string text)
         for p in sorted_periods:
-            row_dict[p] = ""
+            row_dict[p] = None
             
         # Fill in values
         data_points = item.get("data", [])
@@ -198,6 +198,12 @@ def parse_statement_json(statement_list):
             for dp in data_points:
                 yr = dp.get("year") or dp.get("label")
                 val = dp.get("value")
+                if val is not None and val != "":
+                    try:
+                        # Attempt to parse as float to avoid saving numbers as text in Excel
+                        val = float(val)
+                    except ValueError:
+                        pass
                 if yr:
                     yr_str = str(yr)
                     if yr_str in row_dict:
@@ -286,9 +292,9 @@ def fetch_cash_flow_fallback(ticker, period="annual"):
                     date_str = str(col).split("-")[0]  # e.g., '2025'
                 cf_df.rename(columns={col: date_str}, inplace=True)
                 
-                # Scale values to Millions and handle empty cells
+                # Scale values to Millions and handle empty cells (do not use fillna("") to avoid casting to object/text)
                 cf_df[date_str] = pd.to_numeric(cf_df[date_str], errors='coerce') / 1_000_000
-                cf_df[date_str] = cf_df[date_str].round(2).fillna("")
+                cf_df[date_str] = cf_df[date_str].round(2)
                 
             print(f"    [OK] Successfully retrieved Cash Flow via Yahoo Finance fallback ({len(cf_df)} rows)")
             return cf_df
@@ -345,6 +351,10 @@ def main():
         quote_raw = fetch_share_price_quote(company_id)
         if quote_raw and isinstance(quote_raw, dict):
             df_quote = pd.DataFrame(list(quote_raw.items()), columns=["Metric", "Value"])
+            # Attempt to parse values to numeric where possible to avoid text cells in Excel
+            df_quote["Value"] = pd.to_numeric(df_quote["Value"], errors='ignore')
+            # For remaining string values, strip whitespace
+            df_quote["Value"] = df_quote["Value"].apply(lambda v: v.strip() if isinstance(v, str) else v)
         else:
             df_quote = None
             
@@ -362,8 +372,8 @@ def main():
             
         # 7. Save to Excel
         if any(df is not None for df in [df_is, df_bs, df_cf, df_ratios, df_quote, df_news]):
-            # Create subfolder named after the ticker in the workspace root
-            company_dir = os.path.join(".", ticker)
+            # Create subfolder named after the ticker inside the "company_data" folder
+            company_dir = os.path.join(".", "company_data", ticker)
             os.makedirs(company_dir, exist_ok=True)
             
             output_file = os.path.join(company_dir, f"{ticker}_{PERIOD}_financials.xlsx")
