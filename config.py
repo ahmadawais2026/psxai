@@ -9,6 +9,24 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 GEMINI_TEMPERATURE = 0.3          # Low temperature for analytical consistency
 GEMINI_MAX_OUTPUT_TOKENS = 4096
 
+# ── Firebase Configuration ────────────────────────────────────
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# Initialize Firebase App
+firebase_db = None
+try:
+    if not firebase_admin._apps:
+        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if cred_path and os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+        else:
+            firebase_admin.initialize_app()
+    firebase_db = firestore.client()
+except Exception as e:
+    print(f"[-] Failed to initialize Firebase Admin SDK: {e}")
+
 # ── Flask Configuration ───────────────────────────────────────
 FLASK_HOST = "0.0.0.0"
 FLASK_PORT = int(os.getenv("PORT", 5000))

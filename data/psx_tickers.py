@@ -1,250 +1,449 @@
 """
 data/psx_tickers.py
-═══════════════════════════════════════════════════════════════════════
-Curated database of KSE-100 constituent companies listed on the
-Pakistan Stock Exchange (PSX).
+══════════════════════════════════════════════════════════════════════
+Complete PSX company database — auto-generated from AskAnalyst API.
+DO NOT edit manually. Regenerate with: python update_psx_tickers.py
 
-Each entry maps a local ticker symbol (e.g. 'OGDC') to its full
-company name and GICS-style sector classification.  Yahoo Finance
-uses the '.KA' suffix for Karachi-listed equities, so callers should
-append config.PSX_SUFFIX when constructing yfinance ticker strings.
-
-Usage:
-    from data.psx_tickers import search_tickers, get_all_tickers, get_sectors
-
-    results = search_tickers("bank")      # partial name / ticker match
-    all_tickers = get_all_tickers()        # full list
-    sectors = get_sectors()                # unique sector names
-═══════════════════════════════════════════════════════════════════════
+Total companies: 361
+Total sectors:   18
+══════════════════════════════════════════════════════════════════════
 """
 
 from __future__ import annotations
-
 from typing import Dict, List, Optional
 
-# ── KSE-100 Ticker Database ─────────────────────────────────────────
-# Each entry:  symbol → { name, sector }
-# Symbols are *without* the .KA suffix (added at runtime by market_data).
 
-PSX_TICKERS: Dict[str, Dict[str, str]] = {
-    # ── Oil & Gas Exploration / Marketing ────────────────────────────
-    "OGDC":    {"name": "Oil & Gas Development Company",      "sector": "Oil & Gas"},
-    "PPL":     {"name": "Pakistan Petroleum Limited",         "sector": "Oil & Gas"},
-    "PSO":     {"name": "Pakistan State Oil",                 "sector": "Oil & Gas"},
-    "SNGP":    {"name": "Sui Northern Gas Pipelines",         "sector": "Oil & Gas"},
-    "SSGC":    {"name": "Sui Southern Gas Company",           "sector": "Oil & Gas"},
-    "MARI":    {"name": "Mari Petroleum Company",             "sector": "Oil & Gas"},
-    "POL":     {"name": "Pakistan Oilfields Limited",         "sector": "Oil & Gas"},
-    "APL":     {"name": "Attock Petroleum Limited",           "sector": "Oil & Gas"},
-    "SHEL":    {"name": "Shell Pakistan Limited",             "sector": "Oil & Gas"},
-    "ATRL":    {"name": "Attock Refinery Limited",            "sector": "Oil & Gas"},
-    "CNERGY":  {"name": "Cnergyico PK Limited",               "sector": "Oil & Gas"},
+PSX_TICKERS: Dict[str, Dict] = {
+    # ──── Automobile ──────────────────────────────────────────────────
+    "AGIL": {"name": "Agriauto Industries Ltd", "sector": "Automobile", "askanalyst_id": 8},
+    "AGTL": {"name": "Al-Ghazi Tractors Ltd", "sector": "Automobile", "askanalyst_id": 15},
+    "ATBA": {"name": "Atlas Battery Ltd", "sector": "Automobile", "askanalyst_id": 28},
+    "ATLH": {"name": "Atlas Honda Ltd", "sector": "Automobile", "askanalyst_id": 29},
+    "BWHL": {"name": "Baluchistan Wheels Ltd", "sector": "Automobile", "askanalyst_id": 39},
+    "DFML": {"name": "Dewan Farooque Motors Ltd", "sector": "Automobile", "askanalyst_id": 80},
+    "EXIDE": {"name": "Exide Pakistan Ltd", "sector": "Automobile", "askanalyst_id": 100},
+    "GAL": {"name": "Ghandhara Automobiles Limited", "sector": "Automobile", "askanalyst_id": 120},
+    "GHNI": {"name": "Ghandhara Industries Ltd", "sector": "Automobile", "askanalyst_id": 119},
+    "GTYR": {"name": "The General Tyre & Rubber Company Ltd", "sector": "Automobile", "askanalyst_id": 317},
+    "HCAR": {"name": "Honda Atlas Cars (Pakistan) Ltd", "sector": "Automobile", "askanalyst_id": 143},
+    "HINO": {"name": "Hinopak Motors Ltd", "sector": "Automobile", "askanalyst_id": 141},
+    "INDU": {"name": "Indus Motor Company Ltd", "sector": "Automobile", "askanalyst_id": 156},
+    "LOADS": {"name": "Loads Ltd", "sector": "Automobile", "askanalyst_id": 187},
+    "MTL": {"name": "Millat Tractors Ltd", "sector": "Automobile", "askanalyst_id": 202},
+    "PSMC": {"name": "Pak Suzuki Motor Co. Ltd", "sector": "Automobile", "askanalyst_id": 230},
+    "PTL": {"name": "Panther Tyres Ltd", "sector": "Automobile", "askanalyst_id": 346},
+    "SAZEW": {"name": "Sazgar Engineering Works Ltd", "sector": "Automobile", "askanalyst_id": 277},
+    "TBL": {"name": "Treet Battery Limited", "sector": "Automobile", "askanalyst_id": 353},
+    "THALL": {"name": "Thal Ltd", "sector": "Automobile", "askanalyst_id": 312},
 
-    # ── Banking ──────────────────────────────────────────────────────
-    "HBL":     {"name": "Habib Bank Limited",                 "sector": "Banking"},
-    "UBL":     {"name": "United Bank Limited",                "sector": "Banking"},
-    "MCB":     {"name": "MCB Bank Limited",                   "sector": "Banking"},
-    "NBP":     {"name": "National Bank of Pakistan",          "sector": "Banking"},
-    "ABL":     {"name": "Allied Bank Limited",                "sector": "Banking"},
-    "BAFL":    {"name": "Bank Alfalah Limited",               "sector": "Banking"},
-    "MEBL":    {"name": "Meezan Bank Limited",                "sector": "Banking"},
-    "BAHL":    {"name": "Bank Al Habib Limited",              "sector": "Banking"},
-    "AKBL":    {"name": "Askari Bank Limited",                "sector": "Banking"},
-    "JSBL":    {"name": "JS Bank Limited",                    "sector": "Banking"},
+    # ──── Banking ─────────────────────────────────────────────────────
+    "ABL": {"name": "Allied Bank Ltd", "sector": "Banking", "askanalyst_id": 19},
+    "AHL": {"name": "Arif Habib Ltd", "sector": "Banking", "askanalyst_id": 23},
+    "AKBL": {"name": "Askari Bank Ltd", "sector": "Banking", "askanalyst_id": 25},
+    "ARMG": {"name": "ARM Green Industries Limited", "sector": "Banking", "askanalyst_id": 57},
+    "BAFL": {"name": "Bank Alfalah Ltd", "sector": "Banking", "askanalyst_id": 41},
+    "BAHL": {"name": "Bank Al Habib Ltd", "sector": "Banking", "askanalyst_id": 40},
+    "BIPL": {"name": "Bankislami Pakistan Ltd", "sector": "Banking", "askanalyst_id": 42},
+    "BML": {"name": "Bank Makramah Ltd", "sector": "Banking", "askanalyst_id": 303},
+    "BOK": {"name": "The Bank of Khyber", "sector": "Banking", "askanalyst_id": 314},
+    "BOP": {"name": "The Bank of Punjab", "sector": "Banking", "askanalyst_id": 315},
+    "DLL": {"name": "Dawood Lawrencepur Ltd", "sector": "Banking", "askanalyst_id": 77},
+    "ENGROH": {"name": "Engro Holdings Limited", "sector": "Banking", "askanalyst_id": 76},
+    "FABL": {"name": "Faysal Bank Ltd", "sector": "Banking", "askanalyst_id": 109},
+    "GRYL": {"name": "Grays Leasing Ltd", "sector": "Banking", "askanalyst_id": 131},
+    "HBL": {"name": "Habib Bank Ltd", "sector": "Banking", "askanalyst_id": 133},
+    "HMB": {"name": "Habib Metropolitan Bank Ltd", "sector": "Banking", "askanalyst_id": 135},
+    "IML": {"name": "Imperial Ltd", "sector": "Banking", "askanalyst_id": 154},
+    "IMS": {"name": "Intermarket Securities Limited", "sector": "Banking", "askanalyst_id": 91},
+    "JSBL": {"name": "JS Bank Ltd", "sector": "Banking", "askanalyst_id": 168},
+    "JSGCL": {"name": "JS Global Capital Ltd", "sector": "Banking", "askanalyst_id": 169},
+    "MCB": {"name": "MCB Bank Ltd", "sector": "Banking", "askanalyst_id": 197},
+    "MEBL": {"name": "Meezan Bank Ltd", "sector": "Banking", "askanalyst_id": 199},
+    "NBP": {"name": "National Bank Of Pakistan", "sector": "Banking", "askanalyst_id": 209},
+    "NEXT": {"name": "Next Capital Ltd", "sector": "Banking", "askanalyst_id": 215},
+    "OLPL": {"name": "OLP Financial Services Pakistan Ltd", "sector": "Banking", "askanalyst_id": 224},
+    "PGLC": {"name": "Pak-Gulf Leasing Company Ltd", "sector": "Banking", "askanalyst_id": 231},
+    "PIAHCLA": {"name": "PIA Holding Company Ltd", "sector": "Banking", "askanalyst_id": 236},
+    "PSX": {"name": "Pakistan Stock Exchange Ltd", "sector": "Banking", "askanalyst_id": 248},
+    "SBL": {"name": "Samba Bank Ltd", "sector": "Banking", "askanalyst_id": 271},
+    "SCBPL": {"name": "Standard Chartered Bank (Pakistan) Ltd", "sector": "Banking", "askanalyst_id": 300},
+    "SILK": {"name": "Silkbank Ltd", "sector": "Banking", "askanalyst_id": 294},
+    "SLCL": {"name": "Security Leasing Corporation Ltd", "sector": "Banking", "askanalyst_id": 278},
+    "SNBL": {"name": "Soneri Bank Ltd", "sector": "Banking", "askanalyst_id": 299},
+    "SPCL": {"name": "Saudi Pak Consultancy Company Ltd", "sector": "Banking", "askanalyst_id": 276},
+    "UBL": {"name": "United Bank Ltd", "sector": "Banking", "askanalyst_id": 333},
 
-    # ── Cement ───────────────────────────────────────────────────────
-    "LUCK":    {"name": "Lucky Cement Limited",               "sector": "Cement"},
-    "DGKC":    {"name": "D.G. Khan Cement Company",           "sector": "Cement"},
-    "MLCF":    {"name": "Maple Leaf Cement Factory",          "sector": "Cement"},
-    "FCCL":    {"name": "Fauji Cement Company Limited",       "sector": "Cement"},
-    "KOHC":    {"name": "Kohat Cement Company",               "sector": "Cement"},
-    "PIOC":    {"name": "Pioneer Cement Limited",             "sector": "Cement"},
-    "CHCC":    {"name": "Cherat Cement Company",              "sector": "Cement"},
-    "BWCL":    {"name": "Bestway Cement Limited",             "sector": "Cement"},
+    # ──── Cement ──────────────────────────────────────────────────────
+    "ACPL": {"name": "Attock Cement Pakistan Ltd", "sector": "Cement", "askanalyst_id": 31},
+    "BWCL": {"name": "Bestway Cement Ltd", "sector": "Cement", "askanalyst_id": 48},
+    "CHCC": {"name": "Cherat Cement Company Ltd", "sector": "Cement", "askanalyst_id": 63},
+    "DCL": {"name": "Dewan Cement Ltd", "sector": "Cement", "askanalyst_id": 79},
+    "DGKC": {"name": "D.G. Khan Cement Company Ltd", "sector": "Cement", "askanalyst_id": 72},
+    "DNCC": {"name": "Dandot Cement Company Ltd", "sector": "Cement", "askanalyst_id": 75},
+    "FCCL": {"name": "Fauji Cement Company Ltd", "sector": "Cement", "askanalyst_id": 105},
+    "FECTC": {"name": "Fecto Cement Ltd", "sector": "Cement", "askanalyst_id": 111},
+    "FLYNG": {"name": "Flying Cement Company Ltd", "sector": "Cement", "askanalyst_id": 114},
+    "GWLC": {"name": "Gharibwal Cement Ltd", "sector": "Cement", "askanalyst_id": 125},
+    "JVDC": {"name": "Javedan Corporation Ltd", "sector": "Cement", "askanalyst_id": 166},
+    "KOHC": {"name": "Kohat Cement Company Ltd", "sector": "Cement", "askanalyst_id": 178},
+    "LUCK": {"name": "Lucky Cement Ltd", "sector": "Cement", "askanalyst_id": 189},
+    "MLCF": {"name": "Maple Leaf Cement Factory Ltd", "sector": "Cement", "askanalyst_id": 193},
+    "PIOC": {"name": "Pioneer Cement Ltd", "sector": "Cement", "askanalyst_id": 254},
+    "POWER": {"name": "Power Cement Ltd", "sector": "Cement", "askanalyst_id": 255},
+    "SMCPL": {"name": "Safe Mix Concrete Limited", "sector": "Cement", "askanalyst_id": 730},
+    "THCCL": {"name": "Thatta Cement Company Ltd", "sector": "Cement", "askanalyst_id": 313},
 
-    # ── Fertilizer ───────────────────────────────────────────────────
-    "ENGRO":   {"name": "Engro Corporation Limited",          "sector": "Fertilizer"},
-    "EFERT":   {"name": "Engro Fertilizers Limited",          "sector": "Fertilizer"},
-    "FFC":     {"name": "Fauji Fertilizer Company",           "sector": "Fertilizer"},
-    "FATIMA":  {"name": "Fatima Fertilizer Company",          "sector": "Fertilizer"},
-    "FFBL":    {"name": "Fauji Fertilizer Bin Qasim",         "sector": "Fertilizer"},
+    # ──── Chemical ────────────────────────────────────────────────────
+    "ARPL": {"name": "Archroma Pakistan Ltd", "sector": "Chemical", "askanalyst_id": 22},
+    "BAPL": {"name": "Bawanyair Products Ltd", "sector": "Chemical", "askanalyst_id": 45},
+    "BATA": {"name": "Bata Pakistan Ltd", "sector": "Chemical", "askanalyst_id": 44},
+    "BERG": {"name": "Berger Paints Pakistan Ltd", "sector": "Chemical", "askanalyst_id": 47},
+    "BGL": {"name": "Balochistan Glass Ltd", "sector": "Chemical", "askanalyst_id": 38},
+    "BIFO": {"name": "Biafo Industries Ltd", "sector": "Chemical", "askanalyst_id": 50},
+    "BUXL": {"name": "Buxly Paints Ltd", "sector": "Chemical", "askanalyst_id": 56},
+    "DOL": {"name": "Descon Oxychem Ltd", "sector": "Chemical", "askanalyst_id": 78},
+    "DYNO": {"name": "Dynea Pakistan Ltd", "sector": "Chemical", "askanalyst_id": 88},
+    "EPCL": {"name": "Engro Polymer & Chemicals Ltd", "sector": "Chemical", "askanalyst_id": 98},
+    "FRCL": {"name": "Frontier Ceramics Ltd", "sector": "Chemical", "askanalyst_id": 116},
+    "GCIL": {"name": "Ghani Chemical Industries Limited", "sector": "Chemical", "askanalyst_id": 478},
+    "GGGL": {"name": "Ghani Global Glass Ltd", "sector": "Chemical", "askanalyst_id": 122},
+    "GGL": {"name": "Ghani Global Holdings Ltd. (Ghani Gases Ltd)", "sector": "Chemical", "askanalyst_id": 123},
+    "GHGL": {"name": "Ghani Glass Ltd", "sector": "Chemical", "askanalyst_id": 121},
+    "GVGL": {"name": "Ghani Value Glass Ltd", "sector": "Chemical", "askanalyst_id": 124},
+    "ICL": {"name": "Ittehad Chemicals Ltd", "sector": "Chemical", "askanalyst_id": 162},
+    "KCL": {"name": "Karam Ceramics Ltd", "sector": "Chemical", "askanalyst_id": 174},
+    "LCI": {"name": "Lucky Core Industries Ltd", "sector": "Chemical", "askanalyst_id": 150},
+    "LOTCHEM": {"name": "Lotte Chemical Pakistan Ltd", "sector": "Chemical", "askanalyst_id": 188},
+    "NICL": {"name": "Nimir Industrial Chemicals Ltd", "sector": "Chemical", "askanalyst_id": 216},
+    "NRSL": {"name": "Nimir Resins Ltd", "sector": "Chemical", "askanalyst_id": 217},
+    "PAKOXY": {"name": "Pakistan Oxygen Ltd", "sector": "Chemical", "askanalyst_id": 241},
+    "SARC": {"name": "Sardar Chemical Industries Ltd", "sector": "Chemical", "askanalyst_id": 275},
+    "SGF": {"name": "Service GlobalFootwear Limited", "sector": "Chemical", "askanalyst_id": 354},
+    "SITC": {"name": "Sitara Chemical Industries Ltd", "sector": "Chemical", "askanalyst_id": 296},
+    "SPL": {"name": "Sitara Peroxide Ltd", "sector": "Chemical", "askanalyst_id": 298},
+    "SRVI": {"name": "Service Industries Ltd", "sector": "Chemical", "askanalyst_id": 280},
+    "STCL": {"name": "Shabbir Tiles & Ceramics Ltd", "sector": "Chemical", "askanalyst_id": 281},
+    "TGL": {"name": "Tariq Glass Industries Ltd", "sector": "Chemical", "askanalyst_id": 309},
+    "WAHN": {"name": "Wah Nobel Chemicals Ltd", "sector": "Chemical", "askanalyst_id": 337},
 
-    # ── Power / Energy ───────────────────────────────────────────────
-    "HUBC":    {"name": "Hub Power Company",                  "sector": "Power"},
-    "KEL":     {"name": "K-Electric Limited",                 "sector": "Power"},
-    "LPL":     {"name": "Lalpir Power Limited",               "sector": "Power"},
-    "KAPCO":   {"name": "Kot Addu Power Company",             "sector": "Power"},
+    # ──── Fertilizer ──────────────────────────────────────────────────
+    "AGL": {"name": "Agritech Ltd", "sector": "Fertilizer", "askanalyst_id": 9},
+    "EFERT": {"name": "Engro Fertilizers Ltd", "sector": "Fertilizer", "askanalyst_id": 97},
+    "ENGRO": {"name": "Engro Corporation Ltd", "sector": "Fertilizer", "askanalyst_id": 96},
+    "FATIMA": {"name": "Fatima Fertilizer Company Ltd", "sector": "Fertilizer", "askanalyst_id": 104},
+    "FFBL": {"name": "Fauji Fertilizer Bin Qasim Ltd", "sector": "Fertilizer", "askanalyst_id": 106},
+    "FFC": {"name": "Fauji Fertilizer Company Ltd", "sector": "Fertilizer", "askanalyst_id": 107},
 
-    # ── Technology ───────────────────────────────────────────────────
-    "TRG":     {"name": "TRG Pakistan Limited",               "sector": "Technology"},
-    "SYS":     {"name": "Systems Limited",                    "sector": "Technology"},
-    "AVN":     {"name": "AVN Technologies (Avanceon)",        "sector": "Technology"},
-    "NETSOL":  {"name": "Netsol Technologies Limited",        "sector": "Technology"},
+    # ──── Food ────────────────────────────────────────────────────────
+    "AABS": {"name": "Al-Abbas Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 13},
+    "ADAMS": {"name": "Adam Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 3},
+    "AGSML": {"name": "Abdullah Shah Ghazi Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 2},
+    "ALNRS": {"name": "Al-Noor Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 17},
+    "ASC": {"name": "Al Shaheer Corporation", "sector": "Food", "askanalyst_id": 12},
+    "BAFS": {"name": "Baba Farid Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 36},
+    "BBFL": {"name": "Big Bird Foods Limited", "sector": "Food", "askanalyst_id": 361},
+    "BFAGRO": {"name": "Barkat Frisian Agro Limited", "sector": "Food", "askanalyst_id": 350},
+    "BNL": {"name": "Bunny's Ltd", "sector": "Food", "askanalyst_id": 54},
+    "CHAS": {"name": "Chashma Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 61},
+    "CLOV": {"name": "Clover Pakistan Ltd", "sector": "Food", "askanalyst_id": 65},
+    "COLG": {"name": "Colgate-Palmolive (Pakistan) Ltd", "sector": "Food", "askanalyst_id": 67},
+    "DWSM": {"name": "Dewan Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 84},
+    "FCEPL": {"name": "FrieslandCampina Engro Pakistan Ltd", "sector": "Food", "askanalyst_id": 115},
+    "FFL": {"name": "Fauji Foods Ltd", "sector": "Food", "askanalyst_id": 108},
+    "FRSM": {"name": "Faran Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 102},
+    "GIL": {"name": "Goodluck Industries Ltd", "sector": "Food", "askanalyst_id": 130},
+    "GLPL": {"name": "Gillette Pakistan Ltd", "sector": "Food", "askanalyst_id": 126},
+    "HABSM": {"name": "Habib Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 137},
+    "HRPL": {"name": "Habib Rice Product Ltd", "sector": "Food", "askanalyst_id": 136},
+    "ISIL": {"name": "Ismail Industries Ltd", "sector": "Food", "askanalyst_id": 160},
+    "JDWS": {"name": "JDW Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 167},
+    "KPUS": {"name": "Khairpur Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 175},
+    "MFFL": {"name": "Mitchell's Fruit Farms Ltd", "sector": "Food", "askanalyst_id": 204},
+    "MFL": {"name": "Matco Foods Ltd", "sector": "Food", "askanalyst_id": 196},
+    "MIRKS": {"name": "Mirpurkhas Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 203},
+    "MRNS": {"name": "Mehran Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 200},
+    "MUREB": {"name": "Murree Brewery Co. Ltd", "sector": "Food", "askanalyst_id": 206},
+    "NATF": {"name": "National Foods Ltd", "sector": "Food", "askanalyst_id": 210},
+    "NESTLE": {"name": "Nestle Pakistan Ltd", "sector": "Food", "askanalyst_id": 213},
+    "NONS": {"name": "Noon Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 222},
+    "PMRS": {"name": "The Premier Sugar Mills & Distillery Co. Ltd", "sector": "Food", "askanalyst_id": 321},
+    "POML": {"name": "Punjab Oil Mills Ltd", "sector": "Food", "askanalyst_id": 259},
+    "PREMA": {"name": "At-Tahur Ltd", "sector": "Food", "askanalyst_id": 27},
+    "QUICE": {"name": "Quice Food Industries Ltd", "sector": "Food", "askanalyst_id": 261},
+    "RMPL": {"name": "Rafhan Maize Products Co. Ltd", "sector": "Food", "askanalyst_id": 262},
+    "SASML": {"name": "Sindh Abadgar's Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 295},
+    "SCL": {"name": "Shield Corporation Ltd", "sector": "Food", "askanalyst_id": 290},
+    "SHEZ": {"name": "Shezan International Ltd", "sector": "Food", "askanalyst_id": 289},
+    "SHJS": {"name": "Shahtaj Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 285},
+    "SHSML": {"name": "Shahmurad Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 284},
+    "SKRS": {"name": "Sakrand Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 269},
+    "SML": {"name": "Shakarganj Ltd", "sector": "Food", "askanalyst_id": 287},
+    "SSOM": {"name": "S.S.Oil Mills Limited", "sector": "Food", "askanalyst_id": 360},
+    "TCORP": {"name": "Tariq Corporation Limited", "sector": "Food", "askanalyst_id": 146},
+    "TICL": {"name": "The Thal Industries Corporation Ltd", "sector": "Food", "askanalyst_id": 323},
+    "TOMCL": {"name": "The Organic Meat Company Ltd", "sector": "Food", "askanalyst_id": 319},
+    "TREET": {"name": "Treet Corporation Ltd", "sector": "Food", "askanalyst_id": 329},
+    "TSML": {"name": "Tandlianwala Sugar Mills Ltd", "sector": "Food", "askanalyst_id": 308},
+    "UNITY": {"name": "Unity Foods Ltd", "sector": "Food", "askanalyst_id": 336},
+    "UPFL": {"name": "Unilever Pakistan Foods Ltd", "sector": "Food", "askanalyst_id": 332},
+    "ZIL": {"name": "ZIL Ltd", "sector": "Food", "askanalyst_id": 342},
 
-    # ── Textile ──────────────────────────────────────────────────────
-    "NML":     {"name": "Nishat Mills Limited",               "sector": "Textile"},
-    "NCL":     {"name": "Nishat Chunian Limited",             "sector": "Textile"},
-    "ILP":     {"name": "Interloop Limited",                  "sector": "Textile"},
-    "GATM":    {"name": "Gul Ahmed Textile Mills Limited",    "sector": "Textile"},
-    "GATI":    {"name": "Gatron (Industries) Limited",        "sector": "Textile"},
+    # ──── Insurance ───────────────────────────────────────────────────
+    "AGIC": {"name": "Askari General Insurance Co. Ltd", "sector": "Insurance", "askanalyst_id": 26},
+    "AICL": {"name": "Adamjee Insurance Company Ltd", "sector": "Insurance", "askanalyst_id": 4},
+    "ATIL": {"name": "Atlas Insurance Ltd", "sector": "Insurance", "askanalyst_id": 30},
+    "CENI": {"name": "Century Insurance Company Ltd", "sector": "Insurance", "askanalyst_id": 58},
+    "CSIL": {"name": "Crescent Star Insurance Ltd", "sector": "Insurance", "askanalyst_id": 70},
+    "EFUG": {"name": "EFU General Insurance Ltd", "sector": "Insurance", "askanalyst_id": 92},
+    "EFUL": {"name": "EFU Life Assurance Ltd", "sector": "Insurance", "askanalyst_id": 93},
+    "EWIC": {"name": "East West Insurance Co. Ltd", "sector": "Insurance", "askanalyst_id": 89},
+    "HICL": {"name": "Habib Insurance Company Ltd", "sector": "Insurance", "askanalyst_id": 134},
+    "IGIHL": {"name": "IGI Holdings Ltd", "sector": "Insurance", "askanalyst_id": 152},
+    "JGICL": {"name": "Jubilee General Insurance Company Ltd", "sector": "Insurance", "askanalyst_id": 170},
+    "JLICL": {"name": "Jubilee Life Insurance Company Ltd", "sector": "Insurance", "askanalyst_id": 171},
+    "PAKRI": {"name": "Pakistan Reinsurance Company Ltd", "sector": "Insurance", "askanalyst_id": 245},
+    "PIL": {"name": "PICIC Insurance Ltd", "sector": "Insurance", "askanalyst_id": 253},
+    "PINL": {"name": "Premier Insurance Ltd", "sector": "Insurance", "askanalyst_id": 256},
+    "PKGI": {"name": "The Pakistan General Insurance Co. Ltd", "sector": "Insurance", "askanalyst_id": 320},
+    "RICL": {"name": "Reliance Insurance Company Ltd", "sector": "Insurance", "askanalyst_id": 263},
+    "SHNI": {"name": "Shaheen Insurance Company Ltd", "sector": "Insurance", "askanalyst_id": 283},
+    "TPLI": {"name": "TPL Insurance Ltd", "sector": "Insurance", "askanalyst_id": 328},
+    "UNIC": {"name": "The United Insurance Company", "sector": "Insurance", "askanalyst_id": 324},
+    "UVIC": {"name": "The Universal Insurance Co. Ltd", "sector": "Insurance", "askanalyst_id": 325},
 
-    # ── Pharma ───────────────────────────────────────────────────────
-    "GLAXO":   {"name": "GlaxoSmithKline Pakistan",           "sector": "Pharma"},
-    "SEARL":   {"name": "The Searle Company Limited",         "sector": "Pharma"},
-    "AGP":     {"name": "AGP Limited",                        "sector": "Pharma"},
-    "ABOT":    {"name": "Abbott Laboratories Pakistan",       "sector": "Pharma"},
+    # ──── Miscellaneous ───────────────────────────────────────────────
+    "AKGL": {"name": "Al-Khair Gadoon Ltd", "sector": "Miscellaneous", "askanalyst_id": 16},
+    "ECOP": {"name": "Ecopack Ltd", "sector": "Miscellaneous", "askanalyst_id": 90},
+    "GOC": {"name": "GOC (Pak) Ltd", "sector": "Miscellaneous", "askanalyst_id": 129},
+    "MACFL": {"name": "MACPAC Films Ltd", "sector": "Miscellaneous", "askanalyst_id": 190},
+    "PABC": {"name": "Pakistan Aluminium Beverage Cans Ltd", "sector": "Miscellaneous", "askanalyst_id": 343},
+    "PACE": {"name": "Pace (Pakistan) Ltd", "sector": "Miscellaneous", "askanalyst_id": 226},
+    "PHDL": {"name": "Pakistan Hotels Developers Ltd", "sector": "Miscellaneous", "askanalyst_id": 235},
+    "PSEL": {"name": "Pakistan Services Ltd", "sector": "Miscellaneous", "askanalyst_id": 246},
+    "SHFA": {"name": "Shifa International Hospitals Ltd", "sector": "Miscellaneous", "askanalyst_id": 291},
+    "SPEL": {"name": "SPEL Ltd", "sector": "Miscellaneous", "askanalyst_id": 306},
+    "STPL": {"name": "Siddiqsons Tin Plate Ltd", "sector": "Miscellaneous", "askanalyst_id": 292},
+    "TRIPF": {"name": "Tri-Pack Films Ltd", "sector": "Miscellaneous", "askanalyst_id": 331},
+    "UBDL": {"name": "United Brands Ltd", "sector": "Miscellaneous", "askanalyst_id": 334},
+    "UDPL": {"name": "United Distributors Pakistan Ltd", "sector": "Miscellaneous", "askanalyst_id": 335},
 
-    # ── Food & Personal Care ─────────────────────────────────────────
-    "NESTLE":  {"name": "Nestle Pakistan Limited",            "sector": "Food"},
-    "UNITY":   {"name": "Unity Foods Limited",                "sector": "Food"},
-    "FFL":     {"name": "Friesland Campina Engro Foods",      "sector": "Food"},
-    "COLG":    {"name": "Colgate Palmolive Pakistan",         "sector": "Food"},
+    # ──── Oil & Gas ───────────────────────────────────────────────────
+    "APL": {"name": "Attock Petroleum Ltd", "sector": "Oil & Gas", "askanalyst_id": 32},
+    "ATRL": {"name": "Attock Refinery Ltd", "sector": "Oil & Gas", "askanalyst_id": 33},
+    "BPL": {"name": "Burshane LPG (Pakistan) Ltd", "sector": "Oil & Gas", "askanalyst_id": 55},
+    "CNERGY": {"name": "Cnergyico Pk Ltd", "sector": "Oil & Gas", "askanalyst_id": 66},
+    "HASCOL": {"name": "Hascol Petroleum Ltd", "sector": "Oil & Gas", "askanalyst_id": 138},
+    "HTL": {"name": "HI-Tech Lubricants", "sector": "Oil & Gas", "askanalyst_id": 139},
+    "MARI": {"name": "Mari Energies Limited", "sector": "Oil & Gas", "askanalyst_id": 194},
+    "NRL": {"name": "National Refinery Ltd", "sector": "Oil & Gas", "askanalyst_id": 211},
+    "OBOY": {"name": "Oilboy Energy Limited", "sector": "Oil & Gas", "askanalyst_id": 352},
+    "OGDC": {"name": "Oil & Gas Development Company Ltd", "sector": "Oil & Gas", "askanalyst_id": 223},
+    "POL": {"name": "Pakistan Oilfields Ltd", "sector": "Oil & Gas", "askanalyst_id": 240},
+    "PPL": {"name": "Pakistan Petroleum Ltd", "sector": "Oil & Gas", "askanalyst_id": 243},
+    "PRL": {"name": "Pakistan Refinery Ltd", "sector": "Oil & Gas", "askanalyst_id": 244},
+    "PSO": {"name": "Pakistan State Oil Company Ltd", "sector": "Oil & Gas", "askanalyst_id": 247},
+    "SNGP": {"name": "Sui Northern Gas Pipelines Ltd", "sector": "Oil & Gas", "askanalyst_id": 301},
+    "SSGC": {"name": "Sui Southern Gas Company Ltd", "sector": "Oil & Gas", "askanalyst_id": 302},
+    "WAFI": {"name": "Wafi Energy Pakistan Limited", "sector": "Oil & Gas", "askanalyst_id": 288},
 
-    # ── Automobile ───────────────────────────────────────────────────
-    "INDU":    {"name": "Indus Motor Company",                "sector": "Automobile"},
-    "HCAR":    {"name": "Honda Atlas Cars Pakistan",          "sector": "Automobile"},
-    "MTL":     {"name": "Millat Tractors Limited",            "sector": "Automobile"},
+    # ──── Paper & Packaging ───────────────────────────────────────────
+    "CEPB": {"name": "Century Paper & Board Mills Ltd", "sector": "Paper & Packaging", "askanalyst_id": 59},
+    "CPPL": {"name": "Cherat Packaging Ltd", "sector": "Paper & Packaging", "askanalyst_id": 64},
+    "IPAK": {"name": "International Packaging Films Limited", "sector": "Paper & Packaging", "askanalyst_id": 481},
+    "MERIT": {"name": "Merit Packaging Ltd", "sector": "Paper & Packaging", "askanalyst_id": 201},
+    "PKGS": {"name": "Packages Ltd", "sector": "Paper & Packaging", "askanalyst_id": 227},
+    "PPP": {"name": "Pakistan Paper Products Ltd", "sector": "Paper & Packaging", "askanalyst_id": 242},
+    "RPL": {"name": "Roshan Packages Ltd", "sector": "Paper & Packaging", "askanalyst_id": 265},
+    "SEPL": {"name": "Security Papers Ltd", "sector": "Paper & Packaging", "askanalyst_id": 279},
 
-    # ── Steel / Engineering ──────────────────────────────────────────
-    "MUGHAL":  {"name": "Mughal Iron & Steel Industries",     "sector": "Steel"},
-    "ISL":     {"name": "International Steels Limited",       "sector": "Steel"},
-    "ASTL":    {"name": "Amreli Steels Limited",              "sector": "Steel"},
+    # ──── Pharma ──────────────────────────────────────────────────────
+    "ABOT": {"name": "Abbot Laboratories (Pakistan) Ltd", "sector": "Pharma", "askanalyst_id": 1},
+    "AGP": {"name": "AGP Ltd", "sector": "Pharma", "askanalyst_id": 7},
+    "BFBIO": {"name": "BF Biosciences Ltd", "sector": "Pharma", "askanalyst_id": 344},
+    "CPHL": {"name": "Citi Pharma Ltd", "sector": "Pharma", "askanalyst_id": 345},
+    "FEROZ": {"name": "Ferozsons Laboratories Ltd", "sector": "Pharma", "askanalyst_id": 113},
+    "GLAXO": {"name": "GlaxoSmithKline Pakistan Ltd", "sector": "Pharma", "askanalyst_id": 128},
+    "HALEON": {"name": "Haleon Pakistan Ltd", "sector": "Pharma", "askanalyst_id": 127},
+    "HINOON": {"name": "Highnoon Laboratories Ltd", "sector": "Pharma", "askanalyst_id": 140},
+    "HPL": {"name": "Hoehcst Pakistan Ltd", "sector": "Pharma", "askanalyst_id": 272},
+    "IBLHL": {"name": "IBL HealthCare Ltd", "sector": "Pharma", "askanalyst_id": 147},
+    "MACTER": {"name": "Macter International Ltd", "sector": "Pharma", "askanalyst_id": 191},
+    "OTSU": {"name": "Otsuka Pakistan Ltd", "sector": "Pharma", "askanalyst_id": 225},
+    "SEARL": {"name": "The Searle Company Ltd", "sector": "Pharma", "askanalyst_id": 322},
 
-    # ── Chemical ─────────────────────────────────────────────────────
-    "LCI":     {"name": "Lucky Core Industries Limited",      "sector": "Chemical"},
-    "LOTCHEM": {"name": "Lotte Chemical Pakistan",            "sector": "Chemical"},
-    "GGL":     {"name": "Ghani Global Holdings Limited",      "sector": "Chemical"},
+    # ──── Power ───────────────────────────────────────────────────────
+    "ALTN": {"name": "Altern Energy Ltd", "sector": "Power", "askanalyst_id": 20},
+    "EPQL": {"name": "Engro Powergen Qadirpur Ltd", "sector": "Power", "askanalyst_id": 99},
+    "HUBC": {"name": "The Hub Power Company Ltd", "sector": "Power", "askanalyst_id": 318},
+    "JPGL": {"name": "Japan Power Generation Ltd", "sector": "Power", "askanalyst_id": 165},
+    "KAPCO": {"name": "Kot Addu Power Company Ltd", "sector": "Power", "askanalyst_id": 184},
+    "KEL": {"name": "K-Electric Ltd", "sector": "Power", "askanalyst_id": 173},
+    "KOHE": {"name": "Kohinoor Energy Ltd", "sector": "Power", "askanalyst_id": 180},
+    "LPL": {"name": "Lalpir Power Ltd", "sector": "Power", "askanalyst_id": 186},
+    "NCPL": {"name": "Nishat Chunian Power Ltd", "sector": "Power", "askanalyst_id": 219},
+    "NPL": {"name": "Nishat Power Ltd", "sector": "Power", "askanalyst_id": 221},
+    "PKGP": {"name": "Pakgen Power Ltd", "sector": "Power", "askanalyst_id": 232},
+    "SEL": {"name": "Sitara Energy Ltd", "sector": "Power", "askanalyst_id": 297},
+    "SPWL": {"name": "Saif Power Ltd", "sector": "Power", "askanalyst_id": 267},
 
-    # ── Insurance ────────────────────────────────────────────────────
-    "AICL":    {"name": "Adamjee Insurance Company",          "sector": "Insurance"},
-    "JLICL":   {"name": "Jubilee Life Insurance",             "sector": "Insurance"},
+    # ──── Real Estate ─────────────────────────────────────────────────
+    "DCR": {"name": "Dolmen City REIT", "sector": "Real Estate", "askanalyst_id": 87},
 
-    # ── Paper & Packaging ────────────────────────────────────────────
-    "PKGS":    {"name": "Packages Limited",                   "sector": "Paper & Packaging"},
-    "PAEL":    {"name": "Pak Elektron Limited",               "sector": "Paper & Packaging"},
+    # ──── Steel ───────────────────────────────────────────────────────
+    "ADOS": {"name": "Ados Pakistan Ltd", "sector": "Steel", "askanalyst_id": 5},
+    "AGHA": {"name": "Agha Steel Ind.Ltd", "sector": "Steel", "askanalyst_id": 6},
+    "ASL": {"name": "Aisha Steel Mills Ltd", "sector": "Steel", "askanalyst_id": 11},
+    "ASTL": {"name": "Amreli Steels Ltd", "sector": "Steel", "askanalyst_id": 21},
+    "BCL": {"name": "Bolan Castings Ltd", "sector": "Steel", "askanalyst_id": 53},
+    "BECO": {"name": "Beco Steel Ltd", "sector": "Steel", "askanalyst_id": 46},
+    "CSAP": {"name": "Crescent Steel and Allied Products Ltd", "sector": "Steel", "askanalyst_id": 71},
+    "DADX": {"name": "Dadex Eternit Ltd", "sector": "Steel", "askanalyst_id": 74},
+    "HSPI": {"name": "Huffaz Seamless Pipe Industries Ltd", "sector": "Steel", "askanalyst_id": 144},
+    "INIL": {"name": "International Industries Ltd", "sector": "Steel", "askanalyst_id": 158},
+    "ISL": {"name": "International Steels Ltd", "sector": "Steel", "askanalyst_id": 159},
+    "ITTEFAQ": {"name": "Ittefaq Iron Industries Ltd", "sector": "Steel", "askanalyst_id": 161},
+    "KSBP": {"name": "KSB Pumps Company Ltd", "sector": "Steel", "askanalyst_id": 185},
+    "MUGHAL": {"name": "Mughal Iron and Steel Industries Ltd", "sector": "Steel", "askanalyst_id": 205},
+    "PECO": {"name": "Pakistan Engineering Company Ltd", "sector": "Steel", "askanalyst_id": 234},
 
-    # ── Real Estate / Investment ─────────────────────────────────────
-    "GADT":    {"name": "Gadoon Textile Mills",               "sector": "Real Estate"},
+    # ──── Technology ──────────────────────────────────────────────────
+    "AIRLINK": {"name": "Air Link Communication Limited", "sector": "Technology", "askanalyst_id": 359},
+    "AVN": {"name": "Avanceon Ltd", "sector": "Technology", "askanalyst_id": 34},
+    "EMCO": {"name": "Emco Industries Ltd", "sector": "Technology", "askanalyst_id": 95},
+    "FCL": {"name": "Fast Cables Limited", "sector": "Technology", "askanalyst_id": 347},
+    "HUMNL": {"name": "Hum Network Ltd", "sector": "Technology", "askanalyst_id": 145},
+    "MDTL": {"name": "Media Times Ltd", "sector": "Technology", "askanalyst_id": 198},
+    "NETSOL": {"name": "Netsol Technologies Ltd", "sector": "Technology", "askanalyst_id": 214},
+    "OCTOPUS": {"name": "Octopus Digital Limited", "sector": "Technology", "askanalyst_id": 358},
+    "PAEL": {"name": "Pak Elektron Ltd", "sector": "Technology", "askanalyst_id": 229},
+    "PAKD": {"name": "Pak Datacom Ltd", "sector": "Technology", "askanalyst_id": 228},
+    "PCAL": {"name": "Pakistan Cables Ltd", "sector": "Technology", "askanalyst_id": 233},
+    "PTC": {"name": "Pakistan Telecommunication Company Ltd", "sector": "Technology", "askanalyst_id": 250},
+    "SIEM": {"name": "Siemens (Pakistan) Engineering Company Ltd", "sector": "Technology", "askanalyst_id": 293},
+    "SYM": {"name": "Symmetry Group Limited", "sector": "Technology", "askanalyst_id": 351},
+    "SYS": {"name": "Systems Ltd", "sector": "Technology", "askanalyst_id": 307},
+    "TELE": {"name": "Telecard Ltd", "sector": "Technology", "askanalyst_id": 311},
+    "TPL": {"name": "TPL Corporation Ltd", "sector": "Technology", "askanalyst_id": 327},
+    "TRG": {"name": "TRG Pakistan Ltd", "sector": "Technology", "askanalyst_id": 330},
+    "WAVES": {"name": "Waves Corporation Limited", "sector": "Technology", "askanalyst_id": 338},
+    "WAVESAPP": {"name": "Waves Home Appliances Limited", "sector": "Technology", "askanalyst_id": 357},
+    "WTL": {"name": "Worldcall Telecom Ltd", "sector": "Technology", "askanalyst_id": 339},
+    "ZAL": {"name": "Zarea Limited", "sector": "Technology", "askanalyst_id": 348},
 
-    # ── Miscellaneous / Conglomerate ─────────────────────────────────
-    "PAKT":    {"name": "Pakistan Tobacco Company",           "sector": "Tobacco"},
-    "DAWH":    {"name": "Dawood Hercules Corporation",        "sector": "Conglomerate"},
-    "EPCL":    {"name": "Engro Polymer & Chemicals",          "sector": "Chemical"},
+    # ──── Textile ─────────────────────────────────────────────────────
+    "AASM": {"name": "Al-Abid Silk Mills Ltd", "sector": "Textile", "askanalyst_id": 14},
+    "ADMM": {"name": "Artistic Denim Mills Ltd", "sector": "Textile", "askanalyst_id": 24},
+    "AHTM": {"name": "Ahmad Hassan Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 10},
+    "ANL": {"name": "Azgard Nine Ltd", "sector": "Textile", "askanalyst_id": 35},
+    "AWTX": {"name": "Allawasaya Textile and Finishing Mills Ltd", "sector": "Textile", "askanalyst_id": 18},
+    "BCML": {"name": "Babri Cotton Mills Ltd", "sector": "Textile", "askanalyst_id": 37},
+    "BHAT": {"name": "Bhanero Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 49},
+    "BNWM": {"name": "Bannu Woollen Mills Ltd", "sector": "Textile", "askanalyst_id": 43},
+    "BTL": {"name": "Blessed Textiles Ltd", "sector": "Textile", "askanalyst_id": 52},
+    "CFL": {"name": "Crescent Fibres Ltd", "sector": "Textile", "askanalyst_id": 68},
+    "CHBL": {"name": "Chenab Ltd", "sector": "Textile", "askanalyst_id": 62},
+    "CJPL": {"name": "Crescent Jute Products Ltd", "sector": "Textile", "askanalyst_id": 69},
+    "CRTM": {"name": "The Crescent Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 316},
+    "DFSM": {"name": "Dewan Farooque Spinning Mills Ltd", "sector": "Textile", "askanalyst_id": 81},
+    "DINT": {"name": "Din Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 86},
+    "DKTM": {"name": "Dewan Khalid Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 82},
+    "DMC": {"name": "D.M. Corporation Ltd", "sector": "Textile", "askanalyst_id": 73},
+    "DMTM": {"name": "Dewan Mushtaq Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 83},
+    "DWTM": {"name": "Dewan Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 85},
+    "ELSM": {"name": "Ellcot Spinning Mills Ltd", "sector": "Textile", "askanalyst_id": 94},
+    "FASM": {"name": "Faisal Spinning Mills Ltd", "sector": "Textile", "askanalyst_id": 101},
+    "FML": {"name": "Feroze 1888 Mills Ltd", "sector": "Textile", "askanalyst_id": 112},
+    "FSWL": {"name": "Fateh Sports Wear Ltd", "sector": "Textile", "askanalyst_id": 103},
+    "FZCM": {"name": "Fazal Cloth Mills Ltd", "sector": "Textile", "askanalyst_id": 110},
+    "GADT": {"name": "Gadoon Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 117},
+    "GATI": {"name": "Gatron (Industries) Ltd", "sector": "Textile", "askanalyst_id": 118},
+    "GATM": {"name": "Gul Ahmed Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 132},
+    "HIRAT": {"name": "Hira Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 142},
+    "IBFL": {"name": "Ibrahim Fibres Ltd", "sector": "Textile", "askanalyst_id": 148},
+    "ICCI": {"name": "ICC Industries Ltd", "sector": "Textile", "askanalyst_id": 149},
+    "IDRT": {"name": "Idrees Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 151},
+    "IDYM": {"name": "Indus Dyeing & Manufacturing Co. Ltd", "sector": "Textile", "askanalyst_id": 155},
+    "ILP": {"name": "Interloop Ltd", "sector": "Textile", "askanalyst_id": 157},
+    "IMAGE": {"name": "Image Pakistan Ltd", "sector": "Textile", "askanalyst_id": 153},
+    "JDMT": {"name": "Janana De Malucho Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 164},
+    "JKSM": {"name": "J.K. Spinning Mills Ltd", "sector": "Textile", "askanalyst_id": 163},
+    "JUBS": {"name": "Jubilee Spinning & Weaving Mills Ltd", "sector": "Textile", "askanalyst_id": 172},
+    "KHYT": {"name": "Khyber Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 176},
+    "KML": {"name": "Kohinoor Mills Ltd", "sector": "Textile", "askanalyst_id": 181},
+    "KOHTM": {"name": "Kohat Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 179},
+    "KOSM": {"name": "Kohinoor Spinning Mills Ltd", "sector": "Textile", "askanalyst_id": 182},
+    "KTML": {"name": "Kohinoor Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 183},
+    "MEHT": {"name": "Mahmood Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 192},
+    "MSOT": {"name": "Masood Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 195},
+    "NAGC": {"name": "Nagina Cotton Mills Ltd", "sector": "Textile", "askanalyst_id": 208},
+    "NATM": {"name": "Nadeem Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 207},
+    "NCL": {"name": "Nishat (Chunian) Ltd", "sector": "Textile", "askanalyst_id": 218},
+    "NCML": {"name": "Nazir Cotton Mills Ltd", "sector": "Textile", "askanalyst_id": 212},
+    "NML": {"name": "Nishat Mills Ltd", "sector": "Textile", "askanalyst_id": 220},
+    "PRET": {"name": "Premium Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 257},
+    "PRWM": {"name": "Prosperity Weaving Mills Ltd", "sector": "Textile", "askanalyst_id": 258},
+    "PSYL": {"name": "Pakistan Synthetics Ltd", "sector": "Textile", "askanalyst_id": 249},
+    "QTECH": {"name": "Quantum Data Technologies Limited", "sector": "Textile", "askanalyst_id": 60},
+    "QUET": {"name": "Quetta Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 260},
+    "REWM": {"name": "Reliance Weaving Mills Ltd", "sector": "Textile", "askanalyst_id": 264},
+    "RUPL": {"name": "Rupali Polyester Ltd", "sector": "Textile", "askanalyst_id": 266},
+    "SAIF": {"name": "Saif Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 268},
+    "SAPT": {"name": "Sapphire Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 274},
+    "SFL": {"name": "Sapphire Fibres Ltd", "sector": "Textile", "askanalyst_id": 273},
+    "SHDT": {"name": "Shadab Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 282},
+    "SLYT": {"name": "Sally Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 270},
+    "SURC": {"name": "Suraj Cotton Mills Ltd", "sector": "Textile", "askanalyst_id": 305},
+    "SUTM": {"name": "Sunrays Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 304},
+    "SZTM": {"name": "Shahzad Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 286},
+    "TATM": {"name": "Tata Textile Mills Ltd", "sector": "Textile", "askanalyst_id": 310},
+    "TOWL": {"name": "Towellers Ltd", "sector": "Textile", "askanalyst_id": 326},
+    "YOUW": {"name": "Yousaf Weaving Mills Ltd", "sector": "Textile", "askanalyst_id": 341},
+    "ZUMA": {"name": "Zuma Resources Limited", "sector": "Textile", "askanalyst_id": 51},
+
+    # ──── Tobacco ─────────────────────────────────────────────────────
+    "KHTC": {"name": "Khyber Tobacco Company Ltd", "sector": "Tobacco", "askanalyst_id": 177},
+    "PAKT": {"name": "Pakistan Tobacco Company Ltd", "sector": "Tobacco", "askanalyst_id": 251},
+    "PMPK": {"name": "Philip Morris (Pakistan) Ltd", "sector": "Tobacco", "askanalyst_id": 252},
+
+    # ──── Transport ───────────────────────────────────────────────────
+    "PIBTL": {"name": "Pakistan International Bulk Terminal Ltd", "sector": "Transport", "askanalyst_id": 237},
+    "PICT": {"name": "Pakistan International Container Terminal Ltd", "sector": "Transport", "askanalyst_id": 238},
+    "PNSC": {"name": "Pakistan National Shipping Corporation", "sector": "Transport", "askanalyst_id": 239},
+    "SLGL": {"name": "Secure Logistics-Trax Group Limited", "sector": "Transport", "askanalyst_id": 356},
+
 }
 
 
-# ── Public API ───────────────────────────────────────────────────────
+# ── Public API ──────────────────────────────────────────────────────
 
 
-def get_all_tickers() -> List[Dict[str, str]]:
-    """
-    Return every KSE-100 entry as a flat list of dicts.
-
-    Returns:
-        List of dicts each containing 'symbol', 'name', and 'sector'.
-
-    Example::
-
-        [
-            {"symbol": "OGDC", "name": "Oil & Gas Development Company", "sector": "Oil & Gas"},
-            ...
-        ]
-    """
+def get_all_tickers() -> List[Dict]:
     return [
-        {"symbol": sym, "name": info["name"], "sector": info["sector"]}
+        {"symbol": sym, "name": info["name"], "sector": info["sector"], "askanalyst_id": info.get("askanalyst_id")}
         for sym, info in PSX_TICKERS.items()
     ]
 
 
-def get_ticker_info(symbol: str) -> Optional[Dict[str, str]]:
-    """
-    Look up a single ticker by its exact PSX symbol (case-insensitive).
-
-    Args:
-        symbol: Ticker symbol without .KA suffix (e.g. ``'OGDC'``).
-
-    Returns:
-        Dict with 'symbol', 'name', 'sector' or ``None`` if not found.
-    """
-    key = symbol.upper().replace(".KA", "")
-    info = PSX_TICKERS.get(key)
-    if info is None:
-        return None
-    return {"symbol": key, "name": info["name"], "sector": info["sector"]}
+def get_ticker_info(symbol: str) -> Optional[Dict]:
+    return PSX_TICKERS.get(symbol.strip().upper())
 
 
-def search_tickers(query: str, limit: int = 10) -> List[Dict[str, str]]:
-    """
-    Fuzzy-search PSX tickers by partial symbol *or* company name.
-
-    The search is case-insensitive and matches anywhere inside the
-    symbol or company name string.  Results are sorted so that
-    symbol-prefix matches come first, then name matches.
-
-    Args:
-        query: Partial string to search for (e.g. ``'bank'``, ``'OG'``).
-        limit: Maximum number of results to return (default 10).
-
-    Returns:
-        Sorted list of matching dicts, each with 'symbol', 'name', 'sector'.
-
-    Example::
-
-        >>> search_tickers("bank")
-        [
-            {"symbol": "HBL",  "name": "Habib Bank Limited",   "sector": "Banking"},
-            {"symbol": "NBP",  "name": "National Bank of Pakistan", "sector": "Banking"},
-            ...
-        ]
-    """
-    q = query.upper().strip().replace(".KA", "")
-    if not q:
-        return []
-
-    symbol_prefix: List[Dict[str, str]] = []
-    symbol_contains: List[Dict[str, str]] = []
-    name_matches: List[Dict[str, str]] = []
-
+def search_tickers(query: str, limit: int = 15) -> List[Dict]:
+    q = query.strip().lower()
+    results = []
     for sym, info in PSX_TICKERS.items():
-        entry = {"symbol": sym, "name": info["name"], "sector": info["sector"]}
-        sym_upper = sym.upper()
-        name_upper = info["name"].upper()
-
-        if sym_upper.startswith(q):
-            symbol_prefix.append(entry)
-        elif q in sym_upper:
-            symbol_contains.append(entry)
-        elif q in name_upper:
-            name_matches.append(entry)
-
-    # Merge with priority: exact-prefix > symbol-contains > name-contains
-    combined = symbol_prefix + symbol_contains + name_matches
-    return combined[:limit]
+        if q in sym.lower() or q in info["name"].lower() or q in info["sector"].lower():
+            results.append({"symbol": sym, "name": info["name"], "sector": info["sector"]})
+    return results[:limit]
 
 
 def get_sectors() -> List[str]:
-    """
-    Return a sorted list of unique sector names present in the database.
-
-    Returns:
-        List of sector name strings.
-    """
-    return sorted({info["sector"] for info in PSX_TICKERS.values()})
+    return sorted(set(info["sector"] for info in PSX_TICKERS.values()))
 
 
-def get_tickers_by_sector(sector: str) -> List[Dict[str, str]]:
-    """
-    Filter tickers by sector (case-insensitive).
-
-    Args:
-        sector: Sector name to filter by (e.g. ``'Banking'``).
-
-    Returns:
-        List of matching dicts with 'symbol', 'name', 'sector'.
-    """
-    s = sector.strip().lower()
+def get_tickers_by_sector(sector: str) -> List[Dict]:
     return [
         {"symbol": sym, "name": info["name"], "sector": info["sector"]}
         for sym, info in PSX_TICKERS.items()
-        if info["sector"].lower() == s
+        if info["sector"].lower() == sector.lower()
     ]

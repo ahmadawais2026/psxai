@@ -1,56 +1,32 @@
 """
 portfolio/manager.py
 ═══════════════════════════════════════════════════════════════════════
-SQLite-backed portfolio manager class for tracking user holdings and
-generating position-aware advice context.
+Firebase Firestore-backed portfolio manager class for tracking user holdings
+and generating position-aware advice context.
 ═══════════════════════════════════════════════════════════════════════
 """
 
 from __future__ import annotations
 
 import logging
-import sqlite3
-import os
 from typing import Any, Dict, List, Optional
-from config import PORTFOLIO_DB_PATH
+from config import firebase_db
 from data.market_data import get_quote
 
 logger = logging.getLogger(__name__)
 
-_CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS holdings (
-    symbol   TEXT PRIMARY KEY,
-    shares   REAL NOT NULL,
-    avg_cost REAL NOT NULL
-);
-"""
 
 class PortfolioManager:
-    """Class to manage user portfolio positions stored in an SQLite database."""
+    """Class to manage user portfolio positions stored in Firebase Firestore."""
 
     def __init__(self) -> None:
-        self.db_path = PORTFOLIO_DB_PATH
-        self._init_db()
-
-    def _get_connection(self) -> sqlite3.Connection:
-        """Create and return a database connection, ensuring directories exist."""
-        db_dir = os.path.dirname(self.db_path)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
-        
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _init_db(self) -> None:
-        """Initialize the portfolio database schema."""
-        with self._get_connection() as conn:
-            conn.execute(_CREATE_TABLE_SQL)
-            conn.commit()
+        self.db = firebase_db
+        if self.db is None:
+            logger.error("Firestore database client is not initialized.")
 
     def add_holding(self, symbol: str, shares: float, avg_cost: float) -> bool:
         """
-        Add or update a holding position.
+        Add or update a holding position in Firestore.
         
         Args:
             symbol: Stock symbol without .KA suffix (e.g. 'OGDC')
@@ -62,63 +38,68 @@ class PortfolioManager:
             logger.error(f"Invalid shares ({shares}) or avg_cost ({avg_cost}) for {symbol}")
             return False
             
+        if not self.db:
+            logger.error("No database connection available.")
+            return False
+
         try:
-            with self._get_connection() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO holdings (symbol, shares, avg_cost)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(symbol) DO UPDATE SET
-                        shares = excluded.shares,
-                        avg_cost = excluded.avg_cost
-                    """,
-                    (symbol, shares, avg_cost)
-                )
-                conn.commit()
-            logger.info(f"Updated holding: {symbol} - {shares} shares @ PKR {avg_cost}")
+            doc_ref = self.db.collection("holdings").document(symbol)
+            doc_ref.set({
+                "symbol": symbol,
+                "shares": shares,
+                "avg_cost": avg_cost
+            })
+            logger.info(f"Updated Firestore holding: {symbol} - {shares} shares @ PKR {avg_cost}")
             return True
         except Exception as e:
-            logger.error(f"Error adding holding for {symbol}: {e}")
+            logger.error(f"Error adding holding for {symbol} to Firestore: {e}")
             return False
 
     def remove_holding(self, symbol: str) -> bool:
         """
-        Remove a holding position entirely.
+        Remove a holding position entirely from Firestore.
         
         Args:
             symbol: Stock symbol without .KA suffix (e.g. 'OGDC')
         """
         symbol = symbol.strip().upper()
+        if not self.db:
+            logger.error("No database connection available.")
+            return False
+
         try:
-            with self._get_connection() as conn:
-                cursor = conn.execute("DELETE FROM holdings WHERE symbol = ?", (symbol,))
-                conn.commit()
-                success = cursor.rowcount > 0
-            if success:
-                logger.info(f"Removed holding: {symbol}")
+            doc_ref = self.db.collection("holdings").document(symbol)
+            doc = doc_ref.get()
+            if doc.exists:
+                doc_ref.delete()
+                logger.info(f"Removed Firestore holding: {symbol}")
+                return True
             else:
-                logger.warning(f"Holding not found to remove: {symbol}")
-            return success
+                logger.warning(f"Holding not found to remove from Firestore: {symbol}")
+                return False
         except Exception as e:
-            logger.error(f"Error removing holding for {symbol}: {e}")
+            logger.error(f"Error removing holding for {symbol} from Firestore: {e}")
             return False
 
     def get_holdings(self) -> List[Dict[str, Any]]:
         """
-        Get all holdings with current valuation and calculated P&L.
+        Get all holdings from Firestore with current valuation and calculated P&L.
         
         Returns:
             List of dicts: {symbol, shares, avg_cost, current_price, current_value, cost_basis, pnl, pnl_pct}
         """
         holdings = []
+        if not self.db:
+            logger.error("No database connection available.")
+            return holdings
+
         try:
-            with self._get_connection() as conn:
-                rows = conn.execute("SELECT symbol, shares, avg_cost FROM holdings").fetchall()
-                
-            for row in rows:
-                symbol = row["symbol"]
-                shares = row["shares"]
-                avg_cost = row["avg_cost"]
+            docs = self.db.collection("holdings").stream()
+            for doc in docs:
+                data = doc.to_dict()
+                symbol = data.get("symbol", doc.id).upper()
+                shares = float(data.get("shares", 0.0))
+                avg_cost = float(data.get("avg_cost", 0.0))
                 
                 # Fetch current quote
                 current_price = 0.0
@@ -141,15 +122,14 @@ class PortfolioManager:
                     "pnl": pnl,
                     "pnl_pct": pnl_pct
                 })
-                
         except Exception as e:
-            logger.error(f"Error retrieving holdings: {e}")
+            logger.error(f"Error retrieving holdings from Firestore: {e}")
             
         return holdings
 
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """
-        Calculate and return overall portfolio summary metrics.
+        Calculate and return overall portfolio summary metrics from Firestore holdings.
         
         Returns:
             Dict: {total_value, total_cost, total_pnl, total_pnl_pct, holdings}
@@ -184,7 +164,6 @@ class PortfolioManager:
         """
         symbol = symbol.strip().upper()
         summary = self.get_portfolio_summary()
-        total_val = summary["total_value"]
         
         # Check if stock exists in portfolio
         target_holding = None
