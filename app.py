@@ -23,6 +23,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import firebase_admin
 from firebase_admin import auth
 
+# Clean up FIREBASE_CONFIG env var on Windows if it has bad escaping
+firebase_config = os.environ.get("FIREBASE_CONFIG")
+if firebase_config:
+    cleaned = firebase_config.replace('\\"', '"')
+    if cleaned.startswith('"') and cleaned.endswith('"') and cleaned.count('{') > 0:
+        cleaned = cleaned[1:-1]
+    os.environ["FIREBASE_CONFIG"] = cleaned
+
 # Initialize firebase admin SDK
 if not firebase_admin._apps:
     firebase_admin.initialize_app()
