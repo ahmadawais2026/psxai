@@ -29,7 +29,22 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+# Create a requests session with a default timeout to prevent yfinance/network hangs
+class TimeoutHTTPAdapter(requests.adapters.HTTPAdapter):
+    def __init__(self, *args, **kwargs):
+        self.timeout = kwargs.pop("timeout", 5)
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        timeout = kwargs.get("timeout")
+        if timeout is None:
+            kwargs["timeout"] = self.timeout
+        return super().send(request, **kwargs)
+
 _session = requests.Session()
+_adapter = TimeoutHTTPAdapter(timeout=5)
+_session.mount("https://", _adapter)
+_session.mount("http://", _adapter)
 
 from config import (
     CACHE_TTL_FUNDAMENTALS,
@@ -126,17 +141,7 @@ def get_quote(symbol: str) -> Dict[str, Any]:
         return cached
 
     try:
-        # 1. Fetch yfinance history for fallback and previous close (LDCP)
-        try:
-            ticker = yf.Ticker(_yahoo_symbol(symbol))
-            info = ticker.info or {}
-            hist = ticker.history(period="5d")
-        except Exception as exc:
-            logger.warning("yfinance fetch failed for %s: %s", local, exc)
-            info = {}
-            hist = pd.DataFrame()
-
-        # 2. Try to fetch real-time quote from the official PSX Data Portal
+        # 1. Try to fetch real-time quote from the official PSX Data Portal
         psx_quote = None
         url = f"https://dps.psx.com.pk/timeseries/int/{local}"
         headers = {
@@ -154,50 +159,63 @@ def get_quote(symbol: str) -> Dict[str, Any]:
                     open_val = float(data[-1][1])
                     volume = int(sum(x[2] for x in data))
                     
-                    # Determine previous close (LDCP)
-                    if not hist.empty:
-                        if len(hist) >= 2:
-                            import datetime
-                            today_str = datetime.date.today().strftime("%Y-%m-%d")
-                            last_hist_date = hist.index[-1].strftime("%Y-%m-%d")
-                            if last_hist_date == today_str:
-                                prev_close = float(hist["Close"].iloc[-2])
+                    # 2. Fetch yfinance history only with period="2d" for previous close (LDCP)
+                    prev_close = price
+                    try:
+                        ticker = yf.Ticker(_yahoo_symbol(symbol))
+                        hist = ticker.history(period="2d", timeout=5)
+                        if not hist.empty:
+                            if len(hist) >= 2:
+                                import datetime
+                                today_str = datetime.date.today().strftime("%Y-%m-%d")
+                                last_hist_date = hist.index[-1].strftime("%Y-%m-%d")
+                                if last_hist_date == today_str:
+                                    prev_close = float(hist["Close"].iloc[-2])
+                                else:
+                                    prev_close = float(hist["Close"].iloc[-1])
                             else:
                                 prev_close = float(hist["Close"].iloc[-1])
-                        else:
-                            prev_close = float(hist["Close"].iloc[-1])
-                    else:
-                        prev_close = float(_safe_get(info, "regularMarketPreviousClose", price))
-
+                    except Exception as yf_exc:
+                        logger.warning("yfinance quick history fetch failed for %s: %s", local, yf_exc)
+                    
                     if prev_close == 0.0:
                         prev_close = price
-
+                        
                     change = price - prev_close
                     change_percent = (change / prev_close) * 100 if prev_close != 0.0 else 0.0
-
+                    
                     psx_quote = {
                         "symbol":                local,
-                        "name":                  _get_clean_name(local, info),
+                        "name":                  _get_clean_name(local, {}),
                         "price":                 price,
                         "change":               change,
                         "change_percent":       change_percent,
                         "volume":               volume,
-                        "market_cap":           _safe_get(info, "marketCap", 0),
+                        "market_cap":           0,
                         "day_high":             day_high,
                         "day_low":              day_low,
                         "open":                 open_val,
                         "previous_close":       prev_close,
-                        "fifty_two_week_high":  _safe_get(info, "fiftyTwoWeekHigh", 0),
-                        "fifty_two_week_low":   _safe_get(info, "fiftyTwoWeekLow", 0),
-                        "currency":             _safe_get(info, "currency", "PKR"),
+                        "fifty_two_week_high":  0,
+                        "fifty_two_week_low":   0,
+                        "currency":             "PKR",
                     }
         except Exception as exc:
             logger.warning("PSX Portal fetch failed for %s: %s", local, exc)
 
-        # 3. Fallback to yfinance history/info overlay if PSX Portal fetch failed or was empty
+        # 3. Fallback to full yfinance history/info overlay if PSX Portal fetch failed or was empty
         if psx_quote is not None:
             quote = psx_quote
         else:
+            try:
+                ticker = yf.Ticker(_yahoo_symbol(symbol))
+                info = ticker.info or {}
+                hist = ticker.history(period="5d", timeout=5)
+            except Exception as exc:
+                logger.warning("yfinance fallback fetch failed for %s: %s", local, exc)
+                info = {}
+                hist = pd.DataFrame()
+
             if hist.empty and (not info or info.get("regularMarketPrice") is None):
                 return {"symbol": local, "error": f"No data found for {local} on yfinance or PSX Portal"}
 
@@ -289,7 +307,7 @@ def get_history(
 
     try:
         ticker = yf.Ticker(_yahoo_symbol(symbol))
-        df: pd.DataFrame = ticker.history(period=period, interval=interval)
+        df: pd.DataFrame = ticker.history(period=period, interval=interval, timeout=5)
 
         if df.empty:
             logger.warning("No history data for %s (period=%s, interval=%s)", local, period, interval)

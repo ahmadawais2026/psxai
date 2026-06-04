@@ -20,11 +20,31 @@ from flask_cors import CORS
 # ── Ensure project root is on path ────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import firebase_admin
+from firebase_admin import auth
+
+# Initialize firebase admin SDK
+if not firebase_admin._apps:
+    firebase_admin.initialize_app()
+
 from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG, GEMINI_API_KEY
 
 # ── Flask App Setup ───────────────────────────────────────────
-app = Flask(__name__, static_folder="static")
+app = Flask(__name__, static_url_path="", static_folder="static")
 CORS(app)
+
+
+def _get_authenticated_uid(req):
+    """Verify Authorization Bearer token from header and return user uid."""
+    auth_header = req.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split("Bearer ")[1]
+    try:
+        decoded_token = auth.verify_id_token(token)
+        return decoded_token["uid"]
+    except Exception:
+        return None
 
 
 # ── Lazy imports (allows app to start even if deps fail) ──────
@@ -142,8 +162,10 @@ def analyze_stock():
         user_context = None
         if data.get("include_portfolio", False):
             try:
-                pm = _get_portfolio_manager()
-                user_context = pm.get_position_context(symbol)
+                uid = _get_authenticated_uid(request)
+                if uid:
+                    pm = _get_portfolio_manager()
+                    user_context = pm.get_position_context(uid, symbol)
             except Exception:
                 user_context = None  # Proceed without portfolio context
 
@@ -172,9 +194,13 @@ def analyze_stock():
 def get_portfolio():
     """Get all user holdings with current values."""
     try:
+        uid = _get_authenticated_uid(request)
+        if not uid:
+            return jsonify({"error": "Unauthorized. Please log in first."}), 401
+            
         pm = _get_portfolio_manager()
-        holdings = pm.get_holdings()
-        summary = pm.get_portfolio_summary()
+        holdings = pm.get_holdings(uid)
+        summary = pm.get_portfolio_summary(uid)
         return jsonify({
             "holdings": holdings,
             "summary": summary
@@ -190,6 +216,10 @@ def add_holding():
     Request body: {"symbol": "OGDC", "shares": 100, "avg_cost": 95.50}
     """
     try:
+        uid = _get_authenticated_uid(request)
+        if not uid:
+            return jsonify({"error": "Unauthorized. Please log in first."}), 401
+
         data = request.get_json(force=True)
         symbol = data.get("symbol", "").strip().upper()
         shares = float(data.get("shares", 0))
@@ -199,7 +229,7 @@ def add_holding():
             return jsonify({"error": "Valid symbol, shares (>0), and avg_cost (>0) are required"}), 400
 
         pm = _get_portfolio_manager()
-        pm.add_holding(symbol, shares, avg_cost)
+        pm.add_holding(uid, symbol, shares, avg_cost)
         return jsonify({"success": True, "message": f"Added {shares} shares of {symbol} at PKR {avg_cost:.2f}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -209,8 +239,14 @@ def add_holding():
 def remove_holding(symbol: str):
     """Remove a holding from the portfolio."""
     try:
+        uid = _get_authenticated_uid(request)
+        if not uid:
+            return jsonify({"error": "Unauthorized. Please log in first."}), 401
+
         pm = _get_portfolio_manager()
-        pm.remove_holding(symbol.upper())
+        success = pm.remove_holding(uid, symbol.upper())
+        if not success:
+            return jsonify({"error": f"Holding {symbol.upper()} not found or could not be removed."}), 400
         return jsonify({"success": True, "message": f"Removed {symbol.upper()} from portfolio"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
