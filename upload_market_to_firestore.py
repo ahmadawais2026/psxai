@@ -95,13 +95,16 @@ def upload_market_data():
             except Exception as e:
                 print(f"[-] Failed to upload catalog {filename}: {e}")
 
-    # 5. Sector Metadata
+    # 5. Sector Metadata & Data
     sectors_dir = os.path.join(market_data_dir, "sectors")
     if os.path.exists(sectors_dir):
+        sector_keys = ["cement", "fertilizer", "omc", "autos", "circulardebt"]
         for name in os.listdir(sectors_dir):
+            filepath = os.path.join(sectors_dir, name)
+            
+            # Metadata json upload
             if name.endswith("_metadata.json"):
                 sector_name = name.replace("_metadata.json", "")
-                filepath = os.path.join(sectors_dir, name)
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         meta_data = json.load(f)
@@ -113,6 +116,40 @@ def upload_market_data():
                     print(f"[OK] Uploaded sector metadata for: {sector_name}.")
                 except Exception as e:
                     print(f"[-] Failed to upload sector metadata for {sector_name}: {e}")
+            
+            # Data json upload (time-series)
+            elif name.endswith(".json"):
+                # Determine sector and dataset names
+                matched_sector = None
+                for key in sector_keys:
+                    if name.startswith(key + "_"):
+                        matched_sector = key
+                        break
+                
+                if matched_sector:
+                    dataset_name = name[len(matched_sector)+1 : -5]  # strip sector_ and .json
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            data_content = json.load(f)
+                        
+                        # Flatten nested arrays to a single flat list if it contains sublists
+                        if isinstance(data_content, list) and len(data_content) > 0 and isinstance(data_content[0], list):
+                            flat_list = []
+                            for sublist in data_content:
+                                if isinstance(sublist, list):
+                                    flat_list.extend(sublist)
+                                else:
+                                    flat_list.append(sublist)
+                            data_content = flat_list
+                            
+                        doc_ref = firebase_db.collection("sectors").document(matched_sector).collection("data").document(dataset_name)
+                        doc_ref.set({
+                            "last_updated": datetime.utcnow().isoformat() + "Z",
+                            "data": data_content
+                        })
+                        print(f"[OK] Uploaded sector data: {matched_sector} -> {dataset_name} ({len(data_content)} items).")
+                    except Exception as e:
+                        print(f"[-] Failed to upload sector data for {matched_sector}/{dataset_name}: {e}")
 
     print("\n[+] Market intelligence data upload to Firestore completed.")
 
