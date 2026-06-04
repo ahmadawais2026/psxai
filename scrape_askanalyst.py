@@ -6,22 +6,24 @@ import pandas as pd
 # ═══════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ═══════════════════════════════════════════════════════════════════════
-# Batch 6: Next 20 PSX companies (99 already scraped in Batches 1-5)
+# Batch 7: Next 20 PSX companies (119 already scraped in Batches 1-6)
 TICKERS = [
-    # Automobile Parts & Accessories / Battery (2)
-    "AGIL", "ATBA",
-    # Fertilizer / Chemicals (3)
-    "AGL", "BERG", "BIFO",
-    # Engineering / Steel (3)
-    "ASL", "BECO", "BWHL",
-    # Food & Personal Care / Sugar / Textile (5)
-    "ASC", "PREMA", "AABS", "ALNRS", "BTL",
-    # Woollen & Textile (2)
-    "BNWM", "ADMM",
-    # Investment Banks & Securities / Insurance (4)
-    "AHL", "AGIC", "ATIL", "ANL",
-    # Glass & Ceramics (1)
-    "BGL",
+    # Engineering & Automobile Allied (4)
+    "ADOS", "BCL", "CSAP", "DADX",
+    # Food & Sugar (3)
+    "BNL", "CHAS", "CLOV",
+    # Chemicals & Refineries (3)
+    "BUXL", "DOL", "DYNO",
+    # Oil Marketing & Utilities (1)
+    "BPL",
+    # Paper, Board & Packaging (2)
+    "CEPB", "CPPL",
+    # Textile Composite & Spinning (2)
+    "BHAT", "AKGL",
+    # Investment Co / Securities (1)
+    "DLL",
+    # Insurance (3)
+    "CENI", "EFUG", "EFUL",
 ]
 BASE_API_URL = "https://api.askanalyst.com.pk/api"
 PERIOD = "quarter"  # "annual" or "quarter"
