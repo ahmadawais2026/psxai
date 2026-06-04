@@ -218,6 +218,44 @@ def parse_cash_flow_json(cf_data):
     return parse_statement_json(cf_list)
 
 
+def fetch_company_ratios(company_id):
+    """Fetch financial ratios from GET /ratio/{id} endpoint."""
+    url = f"{BASE_API_URL}/ratio/{company_id}"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"    [-] Exception fetching financial ratios: {e}")
+    return None
+
+
+def fetch_company_news(company_id):
+    """Fetch company-specific news/announcements from GET /news/{id} endpoint."""
+    url = f"{BASE_API_URL}/news/{company_id}"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            resp_json = r.json()
+            if isinstance(resp_json, dict) and "data" in resp_json:
+                return resp_json.get("data", [])
+    except Exception as e:
+        print(f"    [-] Exception fetching company news: {e}")
+    return None
+
+
+def fetch_share_price_quote(company_id):
+    """Fetch latest share price quote from GET /sharepricedatanew/{id} endpoint."""
+    url = f"{BASE_API_URL}/sharepricedatanew/{company_id}"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"    [-] Exception fetching share price quote: {e}")
+    return None
+
+
 def fetch_cash_flow_fallback(ticker, period="annual"):
     """Fallback to Yahoo Finance to fetch Cash Flow data if the primary API fails."""
     import yfinance as yf
@@ -297,8 +335,33 @@ def main():
             if df_cf is None:
                 df_cf = fetch_cash_flow_fallback(ticker, PERIOD)
         
-        # 4. Save to Excel
-        if (df_is is not None) or (df_bs is not None) or (df_cf is not None):
+        # 4. Fetch Financial Ratios (endpoint: ratio)
+        print("[*] Fetching Financial Ratios...")
+        ratios_raw = fetch_company_ratios(company_id)
+        df_ratios = parse_statement_json(ratios_raw)
+        
+        # 5. Fetch Latest Share Price Quote (endpoint: sharepricedatanew)
+        print("[*] Fetching Live Share Price Quote...")
+        quote_raw = fetch_share_price_quote(company_id)
+        if quote_raw and isinstance(quote_raw, dict):
+            df_quote = pd.DataFrame(list(quote_raw.items()), columns=["Metric", "Value"])
+        else:
+            df_quote = None
+            
+        # 6. Fetch News & Announcements (endpoint: news)
+        print("[*] Fetching News & Announcements...")
+        news_raw = fetch_company_news(company_id)
+        if news_raw:
+            df_news = pd.DataFrame(news_raw)
+            # Reorder/filter columns if dataframe is not empty
+            if not df_news.empty:
+                cols_to_keep = [col for col in ["date", "title", "type", "status", "url"] if col in df_news.columns]
+                df_news = df_news[cols_to_keep]
+        else:
+            df_news = None
+            
+        # 7. Save to Excel
+        if any(df is not None for df in [df_is, df_bs, df_cf, df_ratios, df_quote, df_news]):
             # Create subfolder named after the ticker in the workspace root
             company_dir = os.path.join(".", ticker)
             os.makedirs(company_dir, exist_ok=True)
@@ -327,6 +390,15 @@ def main():
                                 "Reason": "AskAnalyst API returned 500 Internal Error (known bug for bank tickers like HBL)"
                             }])
                             df_note.to_excel(writer, sheet_name="Cash Flow (Unavailable)", index=False)
+                            
+                        if df_ratios is not None:
+                            df_ratios.to_excel(writer, sheet_name="Financial Ratios", index=False)
+                            
+                        if df_quote is not None:
+                            df_quote.to_excel(writer, sheet_name="Latest Quote", index=False)
+                            
+                        if df_news is not None:
+                            df_news.to_excel(writer, sheet_name="News & Announcements", index=False)
                     
                     # Print sheet addition info
                     if df_is is not None:
@@ -335,8 +407,12 @@ def main():
                         print(f"    [OK] Added Balance Sheet ({len(df_bs)} rows)")
                     if df_cf is not None:
                         print(f"    [OK] Added Cash Flow ({len(df_cf)} rows)")
-                    else:
-                        print("    [!] Added empty/note sheet for Cash Flow")
+                    if df_ratios is not None:
+                        print(f"    [OK] Added Financial Ratios ({len(df_ratios)} rows)")
+                    if df_quote is not None:
+                        print(f"    [OK] Added Latest Quote ({len(df_quote)} rows)")
+                    if df_news is not None and not df_news.empty:
+                        print(f"    [OK] Added News & Announcements ({len(df_news)} rows)")
                         
                     print(f"[OK] Successfully saved to: {output_file}")
                     written = True
@@ -347,7 +423,7 @@ def main():
                         print("    [-] Error: Too many locked files. Exiting.")
                         break
         else:
-            print(f"[-] Failed to fetch any financial statements for {ticker}")
+            print(f"[-] Failed to fetch any financial statements or data for {ticker}")
 
         # Rate-limiting delay to avoid server blocks
         print("    [*] Cooling down for 10 seconds...")
