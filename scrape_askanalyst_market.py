@@ -40,27 +40,44 @@ from docx import Document
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-BASE_API_URL    = "https://api.askanalyst.com.pk/api"
-MARKET_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "market_data")
-BRIEFINGS_DIR   = os.path.join(MARKET_DATA_DIR, "briefings")
-PDFS_DIR        = os.path.join(BRIEFINGS_DIR,   "pdfs")
-EXTRACTED_DIR   = os.path.join(BRIEFINGS_DIR,   "extracted")
-SECTORS_DIR     = os.path.join(MARKET_DATA_DIR, "sectors")
-NEWS_DIR        = os.path.join(MARKET_DATA_DIR, "news")
+BASE_API_URL          = "https://api.askanalyst.com.pk/api"
+MARKET_DATA_DIR       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "market_data")
+BRIEFINGS_DIR         = os.path.join(MARKET_DATA_DIR, "briefings")
+PDFS_DIR              = os.path.join(BRIEFINGS_DIR,   "pdfs")
+EXTRACTED_DIR         = os.path.join(BRIEFINGS_DIR,   "extracted")
+BRIEFINGS_CATALOGS_DIR = os.path.join(BRIEFINGS_DIR,   "catalogs")
+BRIEFINGS_SUMMARY_DIR  = os.path.join(BRIEFINGS_DIR,   "summary")
+SECTORS_DIR           = os.path.join(MARKET_DATA_DIR, "sectors")
+NEWS_DIR              = os.path.join(MARKET_DATA_DIR, "news")
+MACRO_DIR             = os.path.join(MARKET_DATA_DIR, "macroeconomics")
 
 REQUEST_TIMEOUT = 30   # seconds — regular API calls
 PDF_TIMEOUT     = 120  # seconds — PDF downloads can be large
 DELAY           = 1    # seconds between every network call
 
 _session = requests.Session()
-_session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+_session.headers.update({
+    "Accept":        "application/json, text/plain, */*",
+    "Content-Type":  "application/json",
+    "Authorization": "Bearer undefined",   # required by AskAnalyst API
+    "Origin":        "https://www.askanalyst.com.pk",
+    "Referer":       "https://www.askanalyst.com.pk/",
+})
+
+# Separate session for PDF downloads — no auth headers so Google Drive doesn't reject
+_pdf_session = requests.Session()
+_pdf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+})
 
 
 # ─── Directory setup ──────────────────────────────────────────────────────────
 
 def setup_dirs():
-    for d in [BRIEFINGS_DIR, PDFS_DIR, EXTRACTED_DIR, SECTORS_DIR, NEWS_DIR]:
+    for d in [BRIEFINGS_DIR, PDFS_DIR, EXTRACTED_DIR, SECTORS_DIR, NEWS_DIR, BRIEFINGS_CATALOGS_DIR, BRIEFINGS_SUMMARY_DIR, MACRO_DIR]:
         os.makedirs(d, exist_ok=True)
+    for sector in ["cement", "fertilizer", "omc", "autos", "circulardebt"]:
+        os.makedirs(os.path.join(SECTORS_DIR, sector), exist_ok=True)
 
 
 # ─── Network helpers ──────────────────────────────────────────────────────────
@@ -98,7 +115,9 @@ def api_post(path, payload):
 def download_pdf_bytes(url):
     """Download a PDF URL and return raw bytes, or None on failure."""
     try:
-        r = _session.get(url, timeout=PDF_TIMEOUT)
+        # Use the plain PDF session — no AskAnalyst auth headers
+        # which would cause Google Drive (and other hosts) to reject the request
+        r = _pdf_session.get(url, timeout=PDF_TIMEOUT, allow_redirects=True)
         r.raise_for_status()
         return r.content
     except requests.exceptions.Timeout:
@@ -287,7 +306,7 @@ def fetch_morning_briefing_chart():
     if data is None:
         print("  [-] Skipped.")
         return
-    save_json(data, os.path.join(BRIEFINGS_DIR, "morning_briefing_summary.json"))
+    save_json(data, os.path.join(BRIEFINGS_SUMMARY_DIR, "morning_briefing_summary.json"))
 
 
 def fetch_news(count=50):
@@ -326,7 +345,7 @@ def fetch_pdf_catalog(endpoint, out_filename, max_pdfs=100):
     df = normalise_pdf_df(df)
 
     # Save the full catalog index regardless of how many PDFs we download
-    save_excel(df, os.path.join(BRIEFINGS_DIR, out_filename), sheet_name="PDFs")
+    save_excel(df, os.path.join(BRIEFINGS_CATALOGS_DIR, out_filename), sheet_name="PDFs")
     print(f"  [i] Catalog has {len(df)} entries — downloading latest {min(max_pdfs, len(df))}.")
 
     url_col   = "URL"   if "URL"   in df.columns else None
@@ -393,7 +412,7 @@ def fetch_macro_indicators():
     if df is None or df.empty:
         print("  [-] Skipped: could not parse response.")
         return
-    save_excel(df, os.path.join(MARKET_DATA_DIR, "macro_indicators_index.xlsx"),
+    save_excel(df, os.path.join(MACRO_DIR, "macro_indicators_index.xlsx"),
                sheet_name="Indicators")
 
 
@@ -401,23 +420,94 @@ def fetch_macro_indicators():
 
 SECTOR_POST_CONFIGS = {
     "cement": [
-        {"key": "retail_prices",    "period": "weekly",  "label": "weekly_retail_prices"},
-        {"key": "local_dispatches", "period": "weekly",  "label": "weekly_local_dispatches"},
+        {
+            "label": "retail_prices",
+            "frequency": "weekly",
+            "payload_extra": {
+                "indices": "All",
+                "type": "price",
+                "parameter": "retail_price",
+                "growth": "value"
+            }
+        },
+        {
+            "label": "local_dispatches",
+            "frequency": "weekly",
+            "payload_extra": {
+                "indices": "All",
+                "type": "sales",
+                "parameter": "local_dispatches",
+                "growth": "value"
+            }
+        }
     ],
     "fertilizer": [
-        {"key": "urea_production",  "period": "monthly", "label": "urea_monthly_production"},
-        {"key": "urea_sales",       "period": "monthly", "label": "urea_monthly_sales"},
+        {
+            "label": "urea_monthly_sales",
+            "frequency": "monthly",
+            "payload_extra": {
+                "type": "sales",
+                "product": "Urea",
+                "parameter": "local_sales",
+                "growth": "value"
+            }
+        },
+        {
+            "label": "urea_monthly_production",
+            "frequency": "monthly",
+            "payload_extra": {
+                "type": "production",
+                "product": "Urea",
+                "parameter": "production",
+                "growth": "value"
+            }
+        }
     ],
     "omc": [
-        {"key": "motor_spirit",     "period": "monthly", "label": "motor_spirit_monthly_sales"},
-        {"key": "hsd",              "period": "monthly", "label": "hsd_monthly_sales"},
+        {
+            "label": "motor_spirit_monthly_sales",
+            "frequency": "monthly",
+            "payload_extra": {
+                "salestab": "productwise",
+                "product": "Motor Spirit",
+                "parameter": "sales",
+                "growth": "value"
+            }
+        },
+        {
+            "label": "hsd_monthly_sales",
+            "frequency": "monthly",
+            "payload_extra": {
+                "salestab": "productwise",
+                "product": "High Speed Diesel",
+                "parameter": "sales",
+                "growth": "value"
+            }
+        }
     ],
     "autos": [
-        {"key": "passenger_cars",   "period": "monthly", "label": "passenger_car_monthly_sales"},
+        {
+            "label": "passenger_car_monthly_sales",
+            "frequency": "monthly",
+            "payload_extra": {
+                "salestab": "categorywise",
+                "category": "Passenger Cars",
+                "parameter": "sales",
+                "growth": "value"
+            }
+        }
     ],
     "circulardebt": [
-        {"key": "circular_debt",    "period": "monthly", "label": "circular_debt_monthly_flows"},
-    ],
+        {
+            "label": "circular_debt_monthly_flows",
+            "frequency": "monthly",
+            "payload_extra": {
+                "type": "flow",
+                "parameter": "value",
+                "growth": "value"
+            }
+        }
+    ]
 }
 
 
@@ -432,33 +522,31 @@ def fetch_sector(sector):
     if metadata is None:
         print(f"  [-] No metadata returned. Skipping {sector}.")
         return
-    save_json(metadata, os.path.join(SECTORS_DIR, f"{sector}_metadata.json"))
+    save_json(metadata, os.path.join(SECTORS_DIR, sector, f"{sector}_metadata.json"))
 
     # Step 2 – POST for each configured dataset
-    # Build the payload using the actual date range and company object from the metadata
     configs = SECTOR_POST_CONFIGS.get(sector, [])
     if not configs:
         print(f"  [!] No POST configs defined for {sector}. Metadata only.")
         return
 
     for cfg in configs:
-        label  = cfg["label"]
-        period = cfg["period"]
+        label     = cfg["label"]
+        frequency = cfg["frequency"]
 
-        # Pull date range from metadata; fall back to a 2-year window if absent
-        dates_list = metadata.get("dates", {}).get(period, [])
-        sdate = dates_list[-1]["start_date"] if dates_list else "2023-01-01"
+        # Pull full date range from metadata for this frequency
+        dates_list = metadata.get("dates", {}).get(frequency, [])
+        sdate = dates_list[-1]["start_date"] if dates_list else "2021-01-01"
         edate = dates_list[0]["start_date"]  if dates_list else "2026-06-01"
 
-        # Use the first company entry from metadata (typically "All Companies")
-        company = metadata.get("company", [{}])[0]
-
         payload = {
-            "company": company,
-            "sdate":   sdate,
-            "edate":   edate,
-            "period":  period,
+            "sdate":     sdate,
+            "edate":     edate,
+            "frequency": frequency,
+            **cfg["payload_extra"]
         }
+        if sector != "circulardebt":
+            payload["company"] = "All Companies"
 
         print(f"  [*] POST {endpoint} -> {label} ({sdate} to {edate})...")
         result = api_post(endpoint, payload)
@@ -468,11 +556,11 @@ def fetch_sector(sector):
             print(f"  [-] No data for {label}.")
             continue
 
-        save_json(result, os.path.join(SECTORS_DIR, f"{sector}_{label}.json"))
+        save_json(result, os.path.join(SECTORS_DIR, sector, f"{sector}_{label}.json"))
 
         df = flatten_to_df(result)
         if df is not None and not df.empty:
-            save_excel(df, os.path.join(SECTORS_DIR, f"{sector}_{label}.xlsx"),
+            save_excel(df, os.path.join(SECTORS_DIR, sector, f"{sector}_{label}.xlsx"),
                        sheet_name=label[:31])
 
 
