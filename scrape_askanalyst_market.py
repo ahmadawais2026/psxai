@@ -147,6 +147,23 @@ def save_excel(df, filepath, sheet_name="Sheet1"):
         print(f"  [-] Failed to save Excel {filepath}: {e}")
 
 
+def save_csv(df, filepath):
+    try:
+        df.to_csv(filepath, index=False, encoding="utf-8")
+        print(f"  [OK] CSV   ({len(df)} rows) -> {filepath}")
+    except Exception as e:
+        print(f"  [-] Failed to save CSV {filepath}: {e}")
+
+
+def save_txt(text, filepath):
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"  [OK] TXT   ({len(text)} chars) -> {filepath}")
+    except Exception as e:
+        print(f"  [-] Failed to save TXT {filepath}: {e}")
+
+
 def sanitize_filename(name, max_len=80):
     """Strip characters that are illegal in filenames and truncate."""
     name = re.sub(r'[\\/*?:"<>|]', "", str(name))
@@ -296,6 +313,25 @@ def extract_and_save_pdf(pdf_bytes, title, base_filename):
     except Exception as e:
         print(f"  [-] Failed to save Word doc for '{title}': {e}")
 
+    # ── Plain text: best format for AI agent consumption ──────────────
+    txt_path = os.path.join(EXTRACTED_DIR, base_filename + ".txt")
+    try:
+        lines = [f"TITLE: {title}", "=" * 60, ""]
+        for page_info in all_pages:
+            lines.append(f"--- Page {page_info['page']} ---")
+            if page_info["text"].strip():
+                lines.append(page_info["text"].strip())
+            for t_idx, table in enumerate(page_info["tables"], start=1):
+                if not table:
+                    continue
+                lines.append(f"\n[Table {t_idx}]")
+                for row in table:
+                    lines.append(" | ".join(row))
+            lines.append("")
+        save_txt("\n".join(lines), txt_path)
+    except Exception as e:
+        print(f"  [-] Failed to save TXT for '{title}': {e}")
+
 
 # ─── Section 1: General Market Summaries & PDF Catalogs ───────────────────────
 
@@ -321,6 +357,8 @@ def fetch_news(count=50):
         print("  [-] Skipped: could not parse response into a table.")
         return
     save_excel(df, os.path.join(NEWS_DIR, "latest_news.xlsx"), sheet_name="News")
+    save_json(df.to_dict(orient="records"), os.path.join(NEWS_DIR, "latest_news.json"))
+    save_csv(df, os.path.join(NEWS_DIR, "latest_news.csv"))
 
 
 def fetch_pdf_catalog(endpoint, out_filename, max_pdfs=100):
@@ -421,22 +459,22 @@ def fetch_macro_indicators():
 SECTOR_POST_CONFIGS = {
     "cement": [
         {
-            "label": "retail_prices",
-            "frequency": "weekly",
+            "label": "domestic_monthly_dispatches",
+            "frequency": "monthly",
             "payload_extra": {
-                "indices": "All",
-                "type": "price",
-                "parameter": "retail_price",
+                "indices": "dispatches",
+                "type": "domestic",
+                "parameter": "value",
                 "growth": "value"
             }
         },
         {
-            "label": "local_dispatches",
-            "frequency": "weekly",
+            "label": "export_monthly_dispatches",
+            "frequency": "monthly",
             "payload_extra": {
-                "indices": "All",
-                "type": "sales",
-                "parameter": "local_dispatches",
+                "indices": "dispatches",
+                "type": "export",
+                "parameter": "value",
                 "growth": "value"
             }
         }
@@ -490,9 +528,21 @@ SECTOR_POST_CONFIGS = {
             "label": "passenger_car_monthly_sales",
             "frequency": "monthly",
             "payload_extra": {
-                "salestab": "categorywise",
-                "category": "Passenger Cars",
+                "salestab": "sales",
+                "category": "All Products",
+                "product": "All Products",
                 "parameter": "sales",
+                "growth": "value"
+            }
+        },
+        {
+            "label": "passenger_car_monthly_production",
+            "frequency": "monthly",
+            "payload_extra": {
+                "salestab": "production",
+                "category": "All Products",
+                "product": "All Products",
+                "parameter": "production",
                 "growth": "value"
             }
         }
@@ -534,10 +584,22 @@ def fetch_sector(sector):
         label     = cfg["label"]
         frequency = cfg["frequency"]
 
-        # Pull full date range from metadata for this frequency
-        dates_list = metadata.get("dates", {}).get(frequency, [])
-        sdate = dates_list[-1]["start_date"] if dates_list else "2021-01-01"
-        edate = dates_list[0]["start_date"]  if dates_list else "2026-06-01"
+        # Pull full date range from metadata for this frequency (handling nested sector structures)
+        dates_dict = metadata.get("dates", {})
+        if sector.lower() == "autos" and "Autos" in dates_dict:
+            dates_list = dates_dict["Autos"].get(frequency, [])
+        elif sector.lower() == "omc" and "Omc" in dates_dict:
+            dates_list = dates_dict["Omc"].get(frequency, [])
+        else:
+            dates_list = dates_dict.get(frequency, [])
+
+        if dates_list:
+            edate = dates_list[0]["start_date"]
+            # Limit range to latest 6 periods to avoid server-side timeouts on historical data
+            sdate = dates_list[min(5, len(dates_list)-1)]["start_date"]
+        else:
+            sdate = "2026-01-01"
+            edate = "2026-06-01"
 
         payload = {
             "sdate":     sdate,
@@ -562,6 +624,7 @@ def fetch_sector(sector):
         if df is not None and not df.empty:
             save_excel(df, os.path.join(SECTORS_DIR, sector, f"{sector}_{label}.xlsx"),
                        sheet_name=label[:31])
+            save_csv(df, os.path.join(SECTORS_DIR, sector, f"{sector}_{label}.csv"))
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
