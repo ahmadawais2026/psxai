@@ -29,7 +29,22 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+# Create a requests session with a default timeout to prevent yfinance/network hangs
+class TimeoutHTTPAdapter(requests.adapters.HTTPAdapter):
+    def __init__(self, *args, **kwargs):
+        self.timeout = kwargs.pop("timeout", 5)
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        timeout = kwargs.get("timeout")
+        if timeout is None:
+            kwargs["timeout"] = self.timeout
+        return super().send(request, **kwargs)
+
 _session = requests.Session()
+_adapter = TimeoutHTTPAdapter(timeout=5)
+_session.mount("https://", _adapter)
+_session.mount("http://", _adapter)
 
 from config import (
     CACHE_TTL_FUNDAMENTALS,
@@ -92,6 +107,113 @@ def _get_clean_name(local: str, info: dict) -> str:
     return yf_name
 
 
+def _parse_period_key(key: str) -> Optional[Any]:
+    import datetime
+    # Try %b-%y (e.g. 'Jun-25', 'Dec-24')
+    try:
+        return datetime.datetime.strptime(key.strip(), "%b-%y")
+    except ValueError:
+        pass
+    # Try %Y (e.g. '2025')
+    try:
+        return datetime.datetime.strptime(key.strip(), "%Y")
+    except ValueError:
+        pass
+    return None
+
+
+def _parse_firestore_financials_to_highlights(data: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    import numpy as np
+    
+    result = {}
+    
+    # 1. Determine the latest period key (e.g., '2025', 'Sep-25')
+    period_keys = []
+    inc_stmt = data.get("income_statement", [])
+    if inc_stmt:
+        sample_row = inc_stmt[0]
+        for k in sample_row.keys():
+            if k not in ["Metric", "Unit", "symbol", "period", "last_updated"]:
+                dt = _parse_period_key(k)
+                if dt:
+                    period_keys.append((dt, k))
+                    
+    if not period_keys:
+        bal_sheet = data.get("balance_sheet", [])
+        if bal_sheet:
+            sample_row = bal_sheet[0]
+            for k in sample_row.keys():
+                if k not in ["Metric", "Unit", "symbol", "period", "last_updated"]:
+                    dt = _parse_period_key(k)
+                    if dt:
+                        period_keys.append((dt, k))
+                        
+    if not period_keys:
+        return {}
+        
+    latest_dt, latest_period = max(period_keys)
+    result["latest_period"] = latest_period
+    
+    def clean_val(val):
+        if val is None:
+            return 0.0
+        try:
+            if isinstance(val, float) and np.isnan(val):
+                return 0.0
+            return float(val)
+        except:
+            return 0.0
+
+    def get_metric_value(statement_name, synonyms):
+        rows = data.get(statement_name, [])
+        for row in rows:
+            metric_name = row.get("Metric", "").strip()
+            if any(syn.lower() in metric_name.lower() for syn in synonyms):
+                return clean_val(row.get(latest_period))
+        return 0.0
+
+    revenue = get_metric_value("income_statement", ["total revenue", "net sales", "markup/interest revenue", "mark-up/interest revenue"])
+    net_income = get_metric_value("income_statement", ["profit after tax", "net income", "net profit", "profit for the period"])
+    operating_profit = get_metric_value("income_statement", ["operating profit", "operating profit/ (loss)", "net mark-up/interest income", "net markup/interest income"])
+    eps = get_metric_value("income_statement", ["eps - basic", "eps", "earnings per share"])
+    
+    total_assets = get_metric_value("balance_sheet", ["total asset - total assets", "total assets", "total asset"])
+    total_liabilities = get_metric_value("balance_sheet", ["total liabilities - total liabilities", "total liabilities", "total liability"])
+    cash = get_metric_value("balance_sheet", ["cash & bank balances", "cash and balances with treasury banks", "cash and cash equivalents"])
+    
+    operating_cash_flow = get_metric_value("cash_flow", ["operating cash flow", "net cash generated from operating activities", "cash flow from operating activities"])
+    free_cash_flow = get_metric_value("cash_flow", ["free cash flow"])
+    
+    roe = get_metric_value("income_statement", ["return on equity", "roe"])
+    if roe == 0.0:
+        roe = None
+        
+    dividend_yield = get_metric_value("income_statement", ["dividend yield"])
+    if dividend_yield == 0.0:
+        dividend_yield = None
+    
+    operating_margin = (operating_profit / revenue * 100) if revenue > 0 else 0.0
+    net_margin = (net_income / revenue * 100) if revenue > 0 else 0.0
+    
+    result.update({
+        "revenue": revenue,
+        "net_income": net_income,
+        "operating_margin": operating_margin,
+        "net_margin": net_margin,
+        "total_assets": total_assets,
+        "total_liabilities": total_liabilities,
+        "cash": cash,
+        "operating_cash_flow": operating_cash_flow,
+        "free_cash_flow": free_cash_flow,
+        "eps": eps,
+        "roe": roe,
+        "dividend_yield": dividend_yield
+    })
+    
+    return result
+
+
+
 # ── Quote ────────────────────────────────────────────────────────────
 
 
@@ -126,17 +248,7 @@ def get_quote(symbol: str) -> Dict[str, Any]:
         return cached
 
     try:
-        # 1. Fetch yfinance history for fallback and previous close (LDCP)
-        try:
-            ticker = yf.Ticker(_yahoo_symbol(symbol))
-            info = ticker.info or {}
-            hist = ticker.history(period="5d")
-        except Exception as exc:
-            logger.warning("yfinance fetch failed for %s: %s", local, exc)
-            info = {}
-            hist = pd.DataFrame()
-
-        # 2. Try to fetch real-time quote from the official PSX Data Portal
+        # 1. Try to fetch real-time quote from the official PSX Data Portal
         psx_quote = None
         url = f"https://dps.psx.com.pk/timeseries/int/{local}"
         headers = {
@@ -154,50 +266,63 @@ def get_quote(symbol: str) -> Dict[str, Any]:
                     open_val = float(data[-1][1])
                     volume = int(sum(x[2] for x in data))
                     
-                    # Determine previous close (LDCP)
-                    if not hist.empty:
-                        if len(hist) >= 2:
-                            import datetime
-                            today_str = datetime.date.today().strftime("%Y-%m-%d")
-                            last_hist_date = hist.index[-1].strftime("%Y-%m-%d")
-                            if last_hist_date == today_str:
-                                prev_close = float(hist["Close"].iloc[-2])
+                    # 2. Fetch yfinance history only with period="2d" for previous close (LDCP)
+                    prev_close = price
+                    try:
+                        ticker = yf.Ticker(_yahoo_symbol(symbol))
+                        hist = ticker.history(period="2d", timeout=5)
+                        if not hist.empty:
+                            if len(hist) >= 2:
+                                import datetime
+                                today_str = datetime.date.today().strftime("%Y-%m-%d")
+                                last_hist_date = hist.index[-1].strftime("%Y-%m-%d")
+                                if last_hist_date == today_str:
+                                    prev_close = float(hist["Close"].iloc[-2])
+                                else:
+                                    prev_close = float(hist["Close"].iloc[-1])
                             else:
                                 prev_close = float(hist["Close"].iloc[-1])
-                        else:
-                            prev_close = float(hist["Close"].iloc[-1])
-                    else:
-                        prev_close = float(_safe_get(info, "regularMarketPreviousClose", price))
-
+                    except Exception as yf_exc:
+                        logger.warning("yfinance quick history fetch failed for %s: %s", local, yf_exc)
+                    
                     if prev_close == 0.0:
                         prev_close = price
-
+                        
                     change = price - prev_close
                     change_percent = (change / prev_close) * 100 if prev_close != 0.0 else 0.0
-
+                    
                     psx_quote = {
                         "symbol":                local,
-                        "name":                  _get_clean_name(local, info),
+                        "name":                  _get_clean_name(local, {}),
                         "price":                 price,
                         "change":               change,
                         "change_percent":       change_percent,
                         "volume":               volume,
-                        "market_cap":           _safe_get(info, "marketCap", 0),
+                        "market_cap":           0,
                         "day_high":             day_high,
                         "day_low":              day_low,
                         "open":                 open_val,
                         "previous_close":       prev_close,
-                        "fifty_two_week_high":  _safe_get(info, "fiftyTwoWeekHigh", 0),
-                        "fifty_two_week_low":   _safe_get(info, "fiftyTwoWeekLow", 0),
-                        "currency":             _safe_get(info, "currency", "PKR"),
+                        "fifty_two_week_high":  0,
+                        "fifty_two_week_low":   0,
+                        "currency":             "PKR",
                     }
         except Exception as exc:
             logger.warning("PSX Portal fetch failed for %s: %s", local, exc)
 
-        # 3. Fallback to yfinance history/info overlay if PSX Portal fetch failed or was empty
+        # 3. Fallback to full yfinance history/info overlay if PSX Portal fetch failed or was empty
         if psx_quote is not None:
             quote = psx_quote
         else:
+            try:
+                ticker = yf.Ticker(_yahoo_symbol(symbol))
+                info = ticker.info or {}
+                hist = ticker.history(period="5d", timeout=5)
+            except Exception as exc:
+                logger.warning("yfinance fallback fetch failed for %s: %s", local, exc)
+                info = {}
+                hist = pd.DataFrame()
+
             if hist.empty and (not info or info.get("regularMarketPrice") is None):
                 return {"symbol": local, "error": f"No data found for {local} on yfinance or PSX Portal"}
 
@@ -289,7 +414,7 @@ def get_history(
 
     try:
         ticker = yf.Ticker(_yahoo_symbol(symbol))
-        df: pd.DataFrame = ticker.history(period=period, interval=interval)
+        df: pd.DataFrame = ticker.history(period=period, interval=interval, timeout=5)
 
         if df.empty:
             logger.warning("No history data for %s (period=%s, interval=%s)", local, period, interval)
@@ -340,6 +465,87 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
     if cached is not None:
         return cached
 
+    # 1. Try to fetch from Firestore first
+    from config import firebase_db
+    if firebase_db:
+        try:
+            doc_ref = firebase_db.collection("companies").document(local).collection("financials")
+            doc = doc_ref.document("annual").get()
+            if not doc.exists:
+                doc = doc_ref.document("quarter").get()
+                
+            if doc.exists:
+                data = doc.to_dict() or {}
+                highlights = _parse_firestore_financials_to_highlights(data, local)
+                
+                # Fetch quote for price-dependent metrics
+                quote = get_quote(symbol) or {}
+                price = quote.get("price", 0.0)
+                
+                eps = highlights.get("eps", 0.0)
+                pe_ratio = (price / eps) if eps > 0 else None
+                
+                total_assets = highlights.get("total_assets", 0.0)
+                total_liabilities = highlights.get("total_liabilities", 0.0)
+                equity = total_assets - total_liabilities
+                
+                # Retrieve shares outstanding from yfinance info if possible
+                shares_outstanding = None
+                try:
+                    ticker = yf.Ticker(_yahoo_symbol(symbol))
+                    info = ticker.info or {}
+                    shares_outstanding = _safe_get(info, "sharesOutstanding")
+                except:
+                    pass
+                
+                book_value = None
+                pb_ratio = None
+                if shares_outstanding and shares_outstanding > 0:
+                    book_value = equity / (shares_outstanding / 1000000.0) # assuming statement units are millions (PKR mn)
+                    if book_value > 0:
+                        pb_ratio = price / book_value
+                
+                roe = highlights.get("roe")
+                if roe is None and equity > 0:
+                    roe = (highlights.get("net_income", 0.0) / equity) * 100
+                
+                debt_equity = None
+                if equity > 0:
+                    debt_equity = (total_liabilities / equity) * 100
+                
+                fundamentals = {
+                    "symbol":               local,
+                    "name":                 local,
+                    "sector":               "N/A",
+                    "pe_ratio":             pe_ratio,
+                    "pb_ratio":             pb_ratio,
+                    "roe":                  roe,
+                    "eps":                  eps,
+                    "dividend_yield":       highlights.get("dividend_yield"),
+                    "debt_to_equity":       debt_equity,
+                    "revenue":              highlights.get("revenue"),
+                    "net_income":           highlights.get("net_income"),
+                    "book_value":           book_value,
+                    "currency":             "PKR",
+                }
+                
+                # Merge with yfinance info for missing meta (like name, sector)
+                try:
+                    ticker = yf.Ticker(_yahoo_symbol(symbol))
+                    info = ticker.info or {}
+                    fundamentals["name"] = _safe_get(info, "longName", _safe_get(info, "shortName", local))
+                    fundamentals["sector"] = _safe_get(info, "sector", "N/A")
+                    fundamentals["industry"] = _safe_get(info, "industry", "N/A")
+                    fundamentals["beta"] = _safe_get(info, "beta")
+                except:
+                    pass
+                    
+                set_cached(cache_key, fundamentals)
+                return fundamentals
+        except Exception as e:
+            logger.warning("Error fetching fundamentals from Firestore for %s: %s", local, e)
+
+    # 2. Fallback to yfinance
     try:
         ticker = yf.Ticker(_yahoo_symbol(symbol))
         info = ticker.info or {}
@@ -426,6 +632,31 @@ def get_financial_statements(symbol: str) -> Dict[str, Any]:
     if cached is not None:
         return cached
 
+    # 1. Try to fetch from Firestore first
+    from config import firebase_db
+    if firebase_db:
+        try:
+            doc_ref = firebase_db.collection("companies").document(local).collection("financials")
+            doc = doc_ref.document("annual").get()
+            if not doc.exists:
+                doc = doc_ref.document("quarter").get()
+                
+            if doc.exists:
+                data = doc.to_dict() or {}
+                highlights = _parse_firestore_financials_to_highlights(data, local)
+                statements = {
+                    "symbol":           local,
+                    "income_statement": data.get("income_statement", []),
+                    "balance_sheet":    data.get("balance_sheet", []),
+                    "cash_flow":        data.get("cash_flow", []),
+                    **highlights
+                }
+                set_cached(cache_key, statements)
+                return statements
+        except Exception as e:
+            logger.warning("Error fetching financial statements from Firestore for %s: %s", local, e)
+
+    # 2. Fallback to yfinance
     def _df_to_dict(df: pd.DataFrame) -> Dict[str, Any]:
         """Convert a yfinance statement DataFrame to a JSON-safe dict."""
         if df is None or df.empty:

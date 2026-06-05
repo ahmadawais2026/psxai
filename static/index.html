@@ -12,7 +12,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <!-- Main Stylesheet -->
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
 
@@ -45,9 +45,12 @@
                     </svg>
                     <h1 class="logo-text">PSX <span class="logo-accent">Advisor</span></h1>
                 </div>
-                <p id="tagline" class="tagline">AI-Powered Investment Intelligence for Pakistan Stock Exchange</p>
             </div>
             <div class="header-actions">
+                <button id="btn-theme-toggle" class="btn btn-icon btn-theme-toggle" aria-label="Toggle theme" title="Toggle Light/Dark Mode">
+                    <svg class="theme-icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                    <svg class="theme-icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                </button>
                 <button id="btn-portfolio-toggle" class="btn btn-ghost" aria-label="Open portfolio" title="My Portfolio">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
                     <span>Portfolio</span>
@@ -68,8 +71,7 @@
         <!-- ─── Search Section ───────────────────────────────── -->
         <section id="search-section" class="search-section" aria-label="Stock Search">
             <div class="search-hero">
-                <h2 class="search-title">Analyze any PSX stock</h2>
-                <p class="search-subtitle">Get AI-powered technical, fundamental, sentiment &amp; risk analysis</p>
+                <h2 class="search-title">PSX Stocks Analyzer</h2>
             </div>
             <div id="search-wrapper" class="search-wrapper">
                 <div class="search-input-group">
@@ -358,7 +360,7 @@
     </main>
 
     <!-- ═══════════════════════════════════════════════════════════
-         PORTFOLIO MODAL
+         PORTFOLIO MODAL (DASHBOARD)
          ═══════════════════════════════════════════════════════════ -->
     <div id="portfolio-modal" class="modal-overlay" hidden aria-modal="true" role="dialog" aria-label="Portfolio Management">
         <div class="modal-backdrop" id="modal-backdrop"></div>
@@ -366,91 +368,178 @@
             <div class="panel-header">
                 <h2 class="panel-title">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
-                    My Portfolio
+                    Portfolio Dashboard
                 </h2>
-                <button id="btn-portfolio-close" class="btn btn-icon" aria-label="Close portfolio">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-
-            <!-- Add Holding Form -->
-            <form id="add-holding-form" class="add-holding-form" autocomplete="off">
-                <h3 class="form-heading">Add Holding</h3>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="holding-symbol" class="form-label">Symbol</label>
-                        <input id="holding-symbol" type="text" class="form-input" placeholder="e.g. OGDC" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="holding-shares" class="form-label">Shares</label>
-                        <input id="holding-shares" type="number" class="form-input data-font" placeholder="100" min="1" step="1" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="holding-cost" class="form-label">Avg Cost (PKR)</label>
-                        <input id="holding-cost" type="number" class="form-input data-font" placeholder="120.50" min="0.01" step="0.01" required>
-                    </div>
-                </div>
-                <button id="btn-add-holding" type="submit" class="btn btn-primary btn-full">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Add to Portfolio
-                </button>
-            </form>
-
-            <div class="panel-divider"></div>
-
-            <!-- Portfolio Summary -->
-            <div id="portfolio-summary" class="portfolio-summary" hidden>
-                <div class="summary-row">
-                    <span class="summary-label">Total Value</span>
-                    <span id="portfolio-total-value" class="summary-value data-font">PKR 0</span>
-                </div>
-                <div class="summary-row">
-                    <span class="summary-label">Total P&amp;L</span>
-                    <span id="portfolio-total-pnl" class="summary-value data-font">PKR 0</span>
-                </div>
-                <div class="summary-row">
-                    <span class="summary-label">P&amp;L %</span>
-                    <span id="portfolio-total-pnl-pct" class="summary-value data-font">0.00%</span>
+                <div class="panel-header-actions">
+                    <button id="btn-auth-signout" class="btn btn-ghost btn-sm" title="Sign Out" style="margin-right: 8px;">Sign Out</button>
+                    <button id="btn-portfolio-close" class="btn btn-icon" aria-label="Close portfolio">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
             </div>
 
-            <!-- Holdings Table -->
-            <div id="portfolio-holdings" class="portfolio-holdings">
-                <div id="portfolio-empty" class="portfolio-empty">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
-                    <p>No holdings yet</p>
-                    <span class="text-muted">Add stocks to track your portfolio</span>
+            <!-- Portfolio Content -->
+            <div id="portfolio-content">
+                <!-- Summary Stats Grid -->
+                <div class="portfolio-stats-grid">
+                    <div class="portfolio-stat-card glass-card">
+                        <span class="stat-label">Net Worth</span>
+                        <span id="portfolio-total-value" class="stat-value data-font">PKR 0.00</span>
+                    </div>
+                    <div class="portfolio-stat-card glass-card">
+                        <span class="stat-label">Cost Basis</span>
+                        <span id="portfolio-total-cost" class="stat-value data-font">PKR 0.00</span>
+                    </div>
+                    <div class="portfolio-stat-card glass-card">
+                        <span class="stat-label">Total Returns</span>
+                        <span id="portfolio-total-pnl" class="stat-value data-font">PKR 0.00</span>
+                        <span id="portfolio-total-pnl-pct" class="stat-badge badge badge--neutral">0.00%</span>
+                    </div>
+                    <div class="portfolio-stat-card glass-card">
+                        <span class="stat-label">Asset Diversity</span>
+                        <span id="portfolio-total-count" class="stat-value data-font">0 Tickers</span>
+                    </div>
                 </div>
-                <table id="holdings-table" class="holdings-table" hidden>
-                    <thead>
-                        <tr>
-                            <th>Symbol</th>
-                            <th class="text-right">Shares</th>
-                            <th class="text-right">Avg Cost</th>
-                            <th class="text-right">Current</th>
-                            <th class="text-right">P&amp;L</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="holdings-tbody">
+
+                <!-- Visualization Chart Section -->
+                <div class="portfolio-visuals glass-card" id="portfolio-visuals-container" hidden>
+                    <h3 class="visuals-title">Asset Allocation</h3>
+                    <div class="visuals-wrapper">
+                        <div class="canvas-container">
+                            <canvas id="allocation-canvas" width="140" height="140"></canvas>
+                        </div>
+                        <div id="allocation-legend" class="allocation-legend">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Collapsible Add Holding Section -->
+                <div class="add-holding-collapsible glass-card">
+                    <button type="button" id="btn-toggle-add-form" class="btn-collapsible">
+                        <span>Add Holding Position</span>
+                        <svg class="chevron-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div id="collapsible-form-body" class="collapsible-body" hidden>
+                        <form id="add-holding-form" class="add-holding-form" autocomplete="off">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <input id="holding-symbol" type="text" class="form-input" placeholder=" " required>
+                                    <label for="holding-symbol" class="form-floating-label">Symbol (e.g. OGDC)</label>
+                                </div>
+                                <div class="form-group">
+                                    <input id="holding-shares" type="number" class="form-input data-font" placeholder=" " min="1" step="1" required>
+                                    <label for="holding-shares" class="form-floating-label">Shares Owned</label>
+                                </div>
+                                <div class="form-group">
+                                    <input id="holding-cost" type="number" class="form-input data-font" placeholder=" " min="0.01" step="0.01" required>
+                                    <label for="holding-cost" class="form-floating-label">Avg Price (PKR)</label>
+                                </div>
+                              </div>
+                              <button id="btn-add-holding" type="submit" class="btn btn-primary btn-full">
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                  Add to Portfolio
+                              </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Holdings Section -->
+                <div id="portfolio-holdings" class="portfolio-holdings-container">
+                    <div class="holdings-header-row">
+                        <h3 class="holdings-title">Active Holdings</h3>
+                        <div class="holdings-controls">
+                            <label for="holdings-sort" class="sort-label">Sort:</label>
+                            <select id="holdings-sort" class="sort-select">
+                                <option value="value">Current Value</option>
+                                <option value="pnl">Total Return</option>
+                                <option value="shares">Shares Owned</option>
+                                <option value="symbol">Ticker Symbol</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="portfolio-empty" class="portfolio-empty">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                        <p>No active holdings</p>
+                        <span class="text-muted">Add positions above to build your dashboard</span>
+                    </div>
+                    
+                    <div id="holdings-list-wrapper" class="holdings-list-wrapper" hidden>
                         <!-- Populated by JS -->
-                    </tbody>
-                </table>
+                    </div>
+                </div>
             </div>
         </aside>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════
-         DISCLAIMER BANNER
+         AUTH MODAL (LOGIN/SIGNUP)
          ═══════════════════════════════════════════════════════════ -->
-    <footer id="disclaimer-banner" class="disclaimer-banner">
-        <div class="container disclaimer-inner">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <p><strong>Disclaimer:</strong> PSX Advisor provides AI-generated analysis for <em>educational and research purposes only</em>. This is <strong>not financial advice</strong>. Always consult a qualified financial advisor before making investment decisions. Past performance does not guarantee future results.</p>
-        </div>
-    </footer>
+    <div id="auth-modal" class="modal-overlay" hidden aria-modal="true" role="dialog" aria-label="User Authentication">
+        <div class="modal-backdrop" id="auth-backdrop"></div>
+        <article class="auth-card glass-card animate-in">
+            <div class="auth-header">
+                <h2 class="auth-title">PSX <span class="logo-accent">Advisor</span></h2>
+                <button id="btn-auth-close" class="btn btn-icon" aria-label="Close authentication">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            
+            <div class="auth-tabs" role="tablist">
+                <button id="tab-login" class="auth-tab active" role="tab" aria-selected="true" aria-controls="auth-form">Sign In</button>
+                <button id="tab-signup" class="auth-tab" role="tab" aria-selected="false" aria-controls="auth-form">Register</button>
+            </div>
+
+            <form id="auth-form" class="auth-form" autocomplete="on">
+                <!-- Email Input -->
+                <div class="form-group">
+                    <input id="auth-email" type="email" class="form-input" placeholder=" " required autocomplete="email">
+                    <label for="auth-email" class="form-floating-label">Email Address</label>
+                </div>
+                
+                <!-- Password Input -->
+                <div class="form-group">
+                    <input id="auth-password" type="password" class="form-input" placeholder=" " required autocomplete="current-password">
+                    <label for="auth-password" class="form-floating-label">Password</label>
+                </div>
+
+                <!-- Confirm Password (hidden on login) -->
+                <div id="group-confirm-password" class="form-group" style="display: none;">
+                    <input id="auth-confirm-password" type="password" class="form-input" placeholder=" " autocomplete="new-password">
+                    <label for="auth-confirm-password" class="form-floating-label">Confirm Password</label>
+                </div>
+
+                <!-- Error Alert -->
+                <div id="auth-error" class="auth-error-msg" hidden></div>
+
+                <!-- Submit Button -->
+                <button id="btn-auth-submit" type="submit" class="btn btn-primary btn-full btn-auth-submit">
+                    <span class="auth-submit-text">Sign In</span>
+                    <div class="auth-spinner" hidden></div>
+                </button>
+            </form>
+
+            <div class="auth-divider">
+                <span>or</span>
+            </div>
+
+            <!-- Google Sign-In -->
+            <button id="btn-google-auth" class="btn btn-google btn-full">
+                <svg class="google-logo" width="18" height="18" viewBox="0 0 24 24">
+                    <path fill="#EA4335" d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.13-5.136 4.13A5.785 5.785 0 0 1 8.2 12.747a5.785 5.785 0 0 1 5.79-5.783c1.55 0 2.97.6 4.05 1.583l3.078-3.078C19.23 3.655 16.38 2.4 13.99 2.4a9.6 9.6 0 0 0-9.6 9.6 9.6 9.6 0 0 0 9.6 9.6c5.36 0 9.53-3.766 9.53-9.6 0-.585-.05-1.154-.15-1.715h-11.13Z"/>
+                </svg>
+                <span>Continue with Google</span>
+            </button>
+        </article>
+    </div>
+
+    <!-- Firebase SDKs (Compat v9/v10) -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 
     <!-- Main Application Script -->
-    <script src="/static/js/app.js"></script>
+    <script src="/js/app.js"></script>
 </body>
 </html>

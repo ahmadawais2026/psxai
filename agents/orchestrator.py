@@ -14,7 +14,6 @@ from typing import Any, Dict, Optional
 
 from data.psx_tickers import PSX_TICKERS
 from data.market_data import get_quote
-from portfolio.manager import PortfolioManager
 
 from agents.technical_analyst import TechnicalAnalystAgent
 from agents.fundamentals_analyst import FundamentalsAnalystAgent
@@ -38,7 +37,6 @@ class Orchestrator:
         self.risk_analyst = RiskAnalystAgent()
         self.research_team = ResearchTeam()
         self.portfolio_manager = PortfolioManagerAgent()
-        self.portfolio_db = PortfolioManager()
 
     def analyze(self, symbol: str, user_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -52,7 +50,46 @@ class Orchestrator:
             Dict: Comprehensive advisory report.
         """
         symbol = symbol.strip().upper()
-        logger.info(f"Orchestrator pipeline started for symbol: {symbol}")
+        
+        # ── Cache Check ───────────────────────────────────────────
+        from data.cache import get_cached, set_cached
+        cache_key = f"analysis:{symbol}"
+        cached_report = get_cached(cache_key, ttl_seconds=3600)  # 1 hour cache
+        
+        # Determine if user has active holdings context to inject
+        has_active_holdings = (
+            user_context is not None 
+            and user_context.get("owns_stock", False) 
+            and user_context.get("shares", 0.0) > 0.0
+        )
+        
+        if cached_report:
+            logger.info(f"Cache hit for analysis of symbol: {symbol}")
+            if not has_active_holdings:
+                # No custom portfolio context needed, return cached report directly
+                return cached_report
+            else:
+                # Re-run only the Portfolio Manager using the cached reports to inject user context
+                logger.info(f"Re-running Portfolio Manager for {symbol} with user context...")
+                analyst_reports = {
+                    "technical": cached_report["technical_report"],
+                    "fundamental": cached_report["fundamental_report"],
+                    "sentiment": cached_report["sentiment_report"],
+                    "risk": cached_report["risk_report"]
+                }
+                final_recommendation = self.portfolio_manager.generate_recommendation(
+                    symbol=symbol,
+                    analyst_reports=analyst_reports,
+                    debate_result=cached_report["debate"],
+                    user_context=user_context
+                )
+                report_copy = dict(cached_report)
+                report_copy["recommendation"] = final_recommendation
+                report_copy["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                return report_copy
+
+        # ── Cache Miss: Run Full Pipeline ────────────────────────
+        logger.info(f"Cache miss for analysis of symbol: {symbol}. Running full pipeline...")
         
         # Fetch current quote first to validate the ticker
         quote = get_quote(symbol)
@@ -84,12 +121,17 @@ class Orchestrator:
                     sector = "Unknown"
             except Exception:
                 sector = "Unknown"
-            
-        # ── Step 2: Resolve Portfolio Context ─────────────────────
-        # If user_context wasn't passed directly (e.g. by API override), read from sqlite
-        if user_context is None:
-            user_context = self.portfolio_db.get_position_context(symbol)
-            
+
+        # To build a clean general cache entry, we run the analysts with empty portfolio context
+        general_context = {
+            "owns_stock": False,
+            "shares": 0.0,
+            "avg_cost": 0.0,
+            "current_value": 0.0,
+            "portfolio_pct": 0.0,
+            "is_concentrated": False
+        }
+        
         # ── Step 3: Run Analyst Agents (Sequential due to rate limits) ──
         # Technical Analyst
         tech_report = self.technical_analyst.analyze(symbol)
@@ -100,8 +142,8 @@ class Orchestrator:
         # Sentiment Analyst
         sent_report = self.sentiment_analyst.analyze(symbol)
         
-        # Risk Analyst
-        risk_report = self.risk_analyst.analyze(symbol, portfolio_context=user_context)
+        # Risk Analyst with general context
+        risk_report = self.risk_analyst.analyze(symbol, portfolio_context=general_context)
         
         # Compile analyst reports dictionary
         analyst_reports = {
@@ -114,16 +156,16 @@ class Orchestrator:
         # ── Step 4: Run Researcher Committee Debate ──────────────
         debate_result = self.research_team.debate(analyst_reports, rounds=2)
         
-        # ── Step 5: Run Portfolio Manager for final verdict ──────
-        final_recommendation = self.portfolio_manager.generate_recommendation(
+        # ── Step 5: Run Portfolio Manager with general context ──
+        general_recommendation = self.portfolio_manager.generate_recommendation(
             symbol=symbol,
             analyst_reports=analyst_reports,
             debate_result=debate_result,
-            user_context=user_context
+            user_context=general_context
         )
         
-        # ── Step 6: Compile overall dossier ───────────────────────
-        report = {
+        # ── Step 6: Compile overall general dossier ───────────────
+        general_report = {
             "symbol": symbol,
             "company_name": company_name,
             "sector": sector,
@@ -141,12 +183,29 @@ class Orchestrator:
                 "agreements": debate_result.get("agreements", []),
                 "disagreements": debate_result.get("disagreements", [])
             },
-            "recommendation": final_recommendation,
+            "recommendation": general_recommendation,
             "disclaimer": DISCLAIMER
         }
         
+        # Save to cache
+        set_cached(cache_key, general_report)
+        logger.info(f"General report cached for symbol: {symbol}")
+        
+        # If user has active holdings, generate recommendation for their custom context and return it
+        if has_active_holdings:
+            logger.info(f"Generating custom recommendation for user context...")
+            final_recommendation = self.portfolio_manager.generate_recommendation(
+                symbol=symbol,
+                analyst_reports=analyst_reports,
+                debate_result=debate_result,
+                user_context=user_context
+            )
+            custom_report = dict(general_report)
+            custom_report["recommendation"] = final_recommendation
+            return custom_report
+            
         logger.info(f"Orchestrator pipeline complete for symbol: {symbol}")
-        return report
+        return general_report
 
     def quick_quote(self, symbol: str) -> Dict[str, Any]:
         """Fetch quick stock quote information."""

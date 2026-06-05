@@ -2,21 +2,32 @@
  * PSX Advisor — Frontend Application Logic
  * ═══════════════════════════════════════════════════════════════════════
  * Handles:
- * 1. State management (current ticker, recent searches, portfolio list)
- * 2. API queries for search, quote, analysis, and portfolio database
- * 3. Dynamic UI rendering of agent reports, debate committee, and verdict
- * 4. Animated confidence gauges, progress trackers, and numeric transitions
- * 5. Complete modal controls and form validations for portfolio management
+ * 1. Theme management (Light/Dark toggling and persistence)
+ * 2. Firebase Initialization (Auto-configuration from Hosting backend)
+ * 3. Firebase Authentication Compat (Login, Signup, Google OAuth, Sign-out)
+ * 4. State management (current ticker, recent searches, user portfolio)
+ * 5. Portfolio Dashboard UI (canvas allocation donut, collapsible forms, table sorting)
+ * 6. Flask API endpoints queries with JWT Authorization Bearer headers
+ * 7. Dynamic UI rendering of agent reports, debate committee, and verdict
  * ═══════════════════════════════════════════════════════════════════
  */
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // ── API BASE URL ─────────────────────────────────────────────────
+    const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? ''
+        : 'https://api-gu36tcyboa-uc.a.run.app';
+
     // ── STATE ────────────────────────────────────────────────────────
     let currentTicker = '';
     let recentSearches = JSON.parse(localStorage.getItem('psx_recent_searches') || '[]');
     let portfolio = [];
+    let currentTheme = 'dark';
 
     // ── DOM ELEMENTS ─────────────────────────────────────────────────
+    // Theme Toggle
+    const btnThemeToggle = document.getElementById('btn-theme-toggle');
+
     // Header & Navigation
     const btnPortfolioToggle = document.getElementById('btn-portfolio-toggle');
     const btnPortfolioClose = document.getElementById('btn-portfolio-close');
@@ -76,34 +87,181 @@ document.addEventListener('DOMContentLoaded', () => {
     const verdictReasoning = document.getElementById('verdict-reasoning');
     const reasoningText = document.getElementById('reasoning-text');
 
-    // Portfolio panel form & list
+    // Portfolio Dashboard UI
+    const portfolioTotalValue = document.getElementById('portfolio-total-value');
+    const portfolioTotalCost = document.getElementById('portfolio-total-cost');
+    const portfolioTotalPnl = document.getElementById('portfolio-total-pnl');
+    const portfolioTotalPnlPct = document.getElementById('portfolio-total-pnl-pct');
+    const portfolioTotalCount = document.getElementById('portfolio-total-count');
+    
+    // Allocation Visualization
+    const portfolioVisualsContainer = document.getElementById('portfolio-visuals-container');
+    const allocationCanvas = document.getElementById('allocation-canvas');
+    const allocationLegend = document.getElementById('allocation-legend');
+
+    // Collapsible Form
+    const btnToggleAddForm = document.getElementById('btn-toggle-add-form');
+    const collapsibleFormBody = document.getElementById('collapsible-form-body');
+
+    // Add Position form & inputs
     const addHoldingForm = document.getElementById('add-holding-form');
     const holdingSymbol = document.getElementById('holding-symbol');
     const holdingShares = document.getElementById('holding-shares');
     const holdingCost = document.getElementById('holding-cost');
-    const portfolioSummary = document.getElementById('portfolio-summary');
-    const portfolioTotalValue = document.getElementById('portfolio-total-value');
-    const portfolioTotalPnl = document.getElementById('portfolio-total-pnl');
-    const portfolioTotalPnlPct = document.getElementById('portfolio-total-pnl-pct');
-    const holdingsTable = document.getElementById('holdings-table');
-    const holdingsTbody = document.getElementById('holdings-tbody');
+    
+    // Holdings list UI elements
     const portfolioEmpty = document.getElementById('portfolio-empty');
+    const holdingsListWrapper = document.getElementById('holdings-list-wrapper');
+    const holdingsSortSelect = document.getElementById('holdings-sort');
+
+    // Auth Modal Elements
+    const authModal = document.getElementById('auth-modal');
+    const authBackdrop = document.getElementById('auth-backdrop');
+    const btnAuthClose = document.getElementById('btn-auth-close');
+    const tabLogin = document.getElementById('tab-login');
+    const tabSignup = document.getElementById('tab-signup');
+    const authForm = document.getElementById('auth-form');
+    const authEmail = document.getElementById('auth-email');
+    const authPassword = document.getElementById('auth-password');
+    const groupConfirmPassword = document.getElementById('group-confirm-password');
+    const authConfirmPassword = document.getElementById('auth-confirm-password');
+    const authError = document.getElementById('auth-error');
+    const btnAuthSubmit = document.getElementById('btn-auth-submit');
+    const btnGoogleAuth = document.getElementById('btn-google-auth');
+    const btnAuthSignout = document.getElementById('btn-auth-signout');
+
+    // Auth Form State
+    let authMode = 'login'; // 'login' or 'signup'
+
+    // Preset Colors for Donut Allocation Slices
+    const ALLOCATION_COLORS = [
+        '#10b981', // Emerald
+        '#06b6d4', // Cyan
+        '#8b5cf6', // Violet
+        '#f43f5e', // Rose
+        '#f59e0b', // Amber
+        '#3b82f6', // Blue
+        '#ec4899', // Pink
+        '#14b8a6', // Teal
+        '#6366f1', // Indigo
+        '#a855f7'  // Purple
+    ];
 
     // ── INITIALIZATION ───────────────────────────────────────────────
-    initApp();
+    await initApp();
 
-    function initApp() {
-        renderRecentSearches();
-        fetchPortfolio();
+    async function initApp() {
+        initTheme();
+        await initFirebase();
         setupEventListeners();
+        renderRecentSearches();
+    }
+
+    // ── THEME FUNCTIONS ──────────────────────────────────────────────
+    function initTheme() {
+        const storedTheme = localStorage.getItem('psx_theme');
+        if (storedTheme) {
+            currentTheme = storedTheme;
+        } else {
+            const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            currentTheme = systemPrefersDark ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', currentTheme);
+    }
+
+    function toggleTheme() {
+        currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', currentTheme);
+        localStorage.setItem('psx_theme', currentTheme);
+    }
+
+    // ── FIREBASE INITIALIZATION ──────────────────────────────────────
+    async function initFirebase() {
+        try {
+            const response = await fetch('/__/firebase/init.json');
+            if (response.ok) {
+                const config = await response.json();
+                firebase.initializeApp(config);
+                console.log('Firebase Compat initialized successfully from /__/firebase/init.json');
+            } else {
+                throw new Error('Host config not found');
+            }
+        } catch (e) {
+            console.warn('Could not load auto-config, falling back to local emulator default config:', e);
+            // Fallback for local emulator environment or standalone testing
+            firebase.initializeApp({
+                apiKey: "mock-api-key",
+                authDomain: "stocks-psx.firebaseapp.com",
+                projectId: "stocks-psx",
+                storageBucket: "stocks-psx.appspot.com",
+                messagingSenderId: "12345678",
+                appId: "1:12345678:web:12345678"
+            });
+        }
+
+        // Initialize Firestore client settings
+        const db = firebase.firestore();
+        // Point to emulator if hosted locally with emulator configurations
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            try {
+                // If emulator is active on these standard ports, connect
+                db.useEmulator('localhost', 8080);
+                firebase.auth().useEmulator('http://localhost:9099/');
+                console.log('Connecting client to local Firebase Emulators (Auth on 9099, Firestore on 8080)');
+            } catch (emuErr) {
+                // Ignore if already initialized
+            }
+        }
+
+        // Listen for authentication changes
+        firebase.auth().onAuthStateChanged(async (user) => {
+            if (user) {
+                console.log('User signed in:', user.email);
+                btnAuthSignout.style.display = 'block';
+                btnPortfolioToggle.innerHTML = `
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                    <span>Dashboard</span>
+                `;
+                closeAuthModal();
+                await fetchPortfolio();
+            } else {
+                console.log('User signed out');
+                btnAuthSignout.style.display = 'none';
+                btnPortfolioToggle.innerHTML = `
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                    <span>Portfolio</span>
+                `;
+                portfolio = [];
+                renderPortfolioEmpty();
+            }
+        });
     }
 
     // ── EVENT LISTENERS ──────────────────────────────────────────────
     function setupEventListeners() {
+        // Theme toggler
+        btnThemeToggle.addEventListener('click', toggleTheme);
+
         // Portfolio panel visibility
-        btnPortfolioToggle.addEventListener('click', openPortfolio);
+        btnPortfolioToggle.addEventListener('click', () => {
+            const user = firebase.auth().currentUser;
+            if (user) {
+                openPortfolio();
+            } else {
+                openAuthModal();
+            }
+        });
         btnPortfolioClose.addEventListener('click', closePortfolio);
         modalBackdrop.addEventListener('click', closePortfolio);
+
+        // Auth Modal controls
+        btnAuthClose.addEventListener('click', closeAuthModal);
+        authBackdrop.addEventListener('click', closeAuthModal);
+        tabLogin.addEventListener('click', () => switchAuthMode('login'));
+        tabSignup.addEventListener('click', () => switchAuthMode('signup'));
+        authForm.addEventListener('submit', handleAuthSubmit);
+        btnGoogleAuth.addEventListener('click', handleGoogleAuth);
+        btnAuthSignout.addEventListener('click', handleSignout);
 
         // Search trigger
         btnSearch.addEventListener('click', () => triggerAnalysis(searchInput.value));
@@ -135,10 +293,18 @@ document.addEventListener('DOMContentLoaded', () => {
         // Retry button
         btnRetry.addEventListener('click', () => triggerAnalysis(currentTicker));
 
+        // Collapsible Add Holding Form
+        btnToggleAddForm.addEventListener('click', toggleAddHoldingForm);
+
         // Form submission for holdings
         addHoldingForm.addEventListener('submit', (e) => {
             e.preventDefault();
             handleAddHolding();
+        });
+
+        // Holdings Table Sorting
+        holdingsSortSelect.addEventListener('change', () => {
+            sortAndRenderHoldings();
         });
     }
 
@@ -154,62 +320,225 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.style.overflow = ''; // Unlock scroll
     }
 
+    function toggleAddHoldingForm() {
+        const isCollapsed = btnToggleAddForm.classList.contains('collapsed');
+        if (isCollapsed) {
+            btnToggleAddForm.classList.remove('collapsed');
+            btnToggleAddForm.setAttribute('aria-expanded', 'true');
+            collapsibleFormBody.removeAttribute('hidden');
+        } else {
+            btnToggleAddForm.classList.add('collapsed');
+            btnToggleAddForm.setAttribute('aria-expanded', 'false');
+            collapsibleFormBody.setAttribute('hidden', '');
+        }
+    }
+
     async function fetchPortfolio() {
+        const user = firebase.auth().currentUser;
+        if (!user) return;
+
         try {
-            const res = await fetch('/api/portfolio');
+            const token = await user.getIdToken();
+            const res = await fetch(`${API_BASE}/api/portfolio`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
             const data = await res.json();
             if (res.ok) {
                 portfolio = data.holdings || [];
                 renderPortfolio(data.summary);
+            } else {
+                console.error('Portfolio response error:', data.error);
             }
         } catch (err) {
             console.error('Failed to fetch portfolio:', err);
         }
     }
 
+    function renderPortfolioEmpty() {
+        portfolioTotalValue.textContent = 'PKR 0.00';
+        portfolioTotalCost.textContent = 'PKR 0.00';
+        portfolioTotalPnl.textContent = 'PKR 0.00';
+        portfolioTotalPnlPct.textContent = '0.00%';
+        portfolioTotalPnlPct.className = 'stat-badge badge badge--neutral';
+        portfolioTotalCount.textContent = '0 Tickers';
+        
+        portfolioEmpty.removeAttribute('hidden');
+        holdingsListWrapper.setAttribute('hidden', '');
+        portfolioVisualsContainer.setAttribute('hidden', '');
+    }
+
     function renderPortfolio(summary) {
         if (!portfolio || portfolio.length === 0) {
-            portfolioEmpty.removeAttribute('hidden');
-            holdingsTable.setAttribute('hidden', '');
-            portfolioSummary.setAttribute('hidden', '');
+            renderPortfolioEmpty();
             return;
         }
 
         portfolioEmpty.setAttribute('hidden', '');
-        holdingsTable.removeAttribute('hidden');
-        portfolioSummary.removeAttribute('hidden');
+        holdingsListWrapper.removeAttribute('hidden');
 
-        // Render Summary Cards
+        // Update Stat Cards
         portfolioTotalValue.textContent = formatCurrency(summary.total_value);
-        portfolioTotalPnl.textContent = formatCurrency(summary.total_pnl);
-        portfolioTotalPnl.className = 'summary-value data-font ' + getPriceColorClass(summary.total_pnl);
+        portfolioTotalCost.textContent = formatCurrency(summary.total_cost);
         
-        portfolioTotalPnlPct.textContent = formatPercent(summary.total_pnl_pct);
-        portfolioTotalPnlPct.className = 'summary-value data-font ' + getPriceColorClass(summary.total_pnl);
+        const pnlColorClass = getPriceColorClass(summary.total_pnl);
+        portfolioTotalPnl.textContent = formatCurrency(summary.total_pnl);
+        portfolioTotalPnl.className = 'stat-value data-font ' + pnlColorClass;
 
-        // Render Holdings Table
-        holdingsTbody.innerHTML = '';
-        portfolio.forEach(h => {
+        portfolioTotalPnlPct.textContent = formatPercent(summary.total_pnl_pct);
+        portfolioTotalPnlPct.className = `stat-badge badge badge--${getTrendClass(summary.total_pnl >= 0 ? 'bullish' : 'bearish')}`;
+
+        portfolioTotalCount.textContent = `${portfolio.length} Ticker${portfolio.length > 1 ? 's' : ''}`;
+
+        // Draw Donut Chart Slices and render Legend
+        renderAllocationChart();
+
+        // Render sorted Holdings Table
+        sortAndRenderHoldings();
+    }
+
+    function renderAllocationChart() {
+        if (!portfolio || portfolio.length === 0) {
+            portfolioVisualsContainer.setAttribute('hidden', '');
+            return;
+        }
+        portfolioVisualsContainer.removeAttribute('hidden');
+
+        // Map values with color assignments
+        const chartData = portfolio.map((h, i) => ({
+            label: h.symbol,
+            value: h.current_value,
+            color: ALLOCATION_COLORS[i % ALLOCATION_COLORS.length]
+        }));
+
+        // Draw donut on canvas
+        drawDonutChart(allocationCanvas, chartData);
+
+        // Build legend with percentages
+        const totalValue = chartData.reduce((sum, d) => sum + d.value, 0);
+        allocationLegend.innerHTML = '';
+        chartData.forEach(item => {
+            const pct = totalValue > 0 ? (item.value / totalValue * 100) : 0;
+            const legendRow = document.createElement('div');
+            legendRow.className = 'legend-item';
+            legendRow.innerHTML = `
+                <div class="legend-key">
+                    <span class="legend-color" style="background-color: ${item.color};"></span>
+                    <span class="legend-sym">${item.label}</span>
+                </div>
+                <span class="legend-val data-font">${pct.toFixed(1)}%</span>
+            `;
+            allocationLegend.appendChild(legendRow);
+        });
+    }
+
+    function drawDonutChart(canvas, data) {
+        const ctx = canvas.getContext('2d');
+        // Handle high DPI retina display clarity
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        
+        const total = data.reduce((sum, item) => sum + item.value, 0);
+        if (total === 0) return;
+        
+        const centerX = rect.width / 2;
+        const centerY = rect.height / 2;
+        const radius = Math.min(centerX, centerY) - 6;
+        const innerRadius = radius * 0.65;
+        
+        let startAngle = -Math.PI / 2; // Start drawing from 12 o'clock top
+        
+        data.forEach(item => {
+            const sliceAngle = (item.value / total) * 2 * Math.PI;
+            if (sliceAngle <= 0) return;
+            
+            // Draw outer arc, then inner arc counter-clockwise to form ring slice
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, startAngle, startAngle + sliceAngle);
+            ctx.arc(centerX, centerY, innerRadius, startAngle + sliceAngle, startAngle, true);
+            ctx.closePath();
+            
+            ctx.fillStyle = item.color;
+            ctx.fill();
+            
+            startAngle += sliceAngle;
+        });
+    }
+
+    function sortAndRenderHoldings() {
+        const sortBy = holdingsSortSelect.value;
+        
+        // Sort portfolio array copy
+        const sorted = [...portfolio].sort((a, b) => {
+            if (sortBy === 'value') {
+                return b.current_value - a.current_value;
+            } else if (sortBy === 'pnl') {
+                return b.pnl - a.pnl;
+            } else if (sortBy === 'shares') {
+                return b.shares - a.shares;
+            } else if (sortBy === 'symbol') {
+                return a.symbol.localeCompare(b.symbol);
+            }
+            return 0;
+        });
+
+        // Generate table HTML contents
+        holdingsListWrapper.innerHTML = `
+            <table class="holdings-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th class="text-right">Shares</th>
+                        <th class="text-right">Avg Cost</th>
+                        <th class="text-right">Price</th>
+                        <th class="text-right">Returns</th>
+                        <th class="text-center">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="holdings-tbody">
+                </tbody>
+            </table>
+        `;
+
+        const holdingsTbody = document.getElementById('holdings-tbody');
+
+        sorted.forEach(h => {
             const tr = document.createElement('tr');
+            tr.className = 'holding-row';
             tr.innerHTML = `
                 <td class="holding-sym">${h.symbol}</td>
-                <td class="text-right data-font">${formatNumberRaw(h.shares)}</td>
+                <td class="text-right data-font">${formatNumberRawInt(h.shares)}</td>
                 <td class="text-right data-font">${formatCurrency(h.avg_cost, false)}</td>
                 <td class="text-right data-font">${formatCurrency(h.current_price, false)}</td>
-                <td class="text-right data-font ${getPriceColorClass(h.pnl)}">${formatPercent(h.pnl_pct)}</td>
+                <td class="text-right data-font ${getPriceColorClass(h.pnl)}">
+                    ${formatPercent(h.pnl_pct)}
+                </td>
                 <td class="text-center">
-                    <button class="btn-delete btn-icon" data-symbol="${h.symbol}" aria-label="Remove ${h.symbol}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                    <button class="btn-delete" data-symbol="${h.symbol}" title="Delete ${h.symbol} position">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
                     </button>
                 </td>
             `;
 
-            // Delete position handler
+            // Delete action handler
             tr.querySelector('.btn-delete').addEventListener('click', async (e) => {
                 const sym = e.currentTarget.getAttribute('data-symbol');
-                if (confirm(`Are you sure you want to remove ${sym} from your portfolio?`)) {
+                if (confirm(`Remove all positions of ${sym} from your portfolio?`)) {
                     await removeHolding(sym);
                 }
+            });
+
+            // Allow clicking symbol row cell to load analysis directly
+            tr.querySelector('.holding-sym').addEventListener('click', () => {
+                closePortfolio();
+                searchInput.value = h.symbol;
+                triggerAnalysis(h.symbol);
             });
 
             holdingsTbody.appendChild(tr);
@@ -217,33 +546,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function handleAddHolding() {
+        const user = firebase.auth().currentUser;
+        if (!user) return;
+
         const symbol = holdingSymbol.value.trim().toUpperCase();
         const shares = parseFloat(holdingShares.value);
         const cost = parseFloat(holdingCost.value);
 
-        if (!symbol || isNaN(shares) || isNaN(cost)) return;
+        if (!symbol || isNaN(shares) || isNaN(cost) || shares <= 0 || cost <= 0) return;
 
         try {
-            const res = await fetch('/api/portfolio/add', {
+            const token = await user.getIdToken();
+            const res = await fetch(`${API_BASE}/api/portfolio/add`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
                 body: JSON.stringify({ symbol, shares, avg_cost: cost })
             });
 
             if (res.ok) {
-                // Clear Form
+                // Reset Fields
                 holdingSymbol.value = '';
                 holdingShares.value = '';
                 holdingCost.value = '';
                 
+                // Hide collapsible
+                toggleAddHoldingForm();
+                
                 await fetchPortfolio();
-                // If the currently analyzed stock matches what we just added, re-run analysis to update position context!
+
+                // If currently viewing details for the added ticker, trigger re-analysis to overlay user holdings insights
                 if (currentTicker === symbol) {
                     triggerAnalysis(symbol);
                 }
             } else {
                 const err = await res.json();
-                alert(err.error || 'Failed to add holding');
+                alert(err.error || 'Failed to add position');
             }
         } catch (e) {
             console.error('Error adding holding:', e);
@@ -251,26 +591,165 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function removeHolding(symbol) {
+        const user = firebase.auth().currentUser;
+        if (!user) return;
+
         try {
-            const res = await fetch(`/api/portfolio/${symbol}`, {
-                method: 'DELETE'
+            const token = await user.getIdToken();
+            const res = await fetch(`${API_BASE}/api/portfolio/${symbol}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
             });
 
             if (res.ok) {
                 await fetchPortfolio();
+                
+                // Reload current analyzer if looking at deleted ticker to clear ownership context advice
                 if (currentTicker === symbol) {
                     triggerAnalysis(symbol);
                 }
+            } else {
+                const err = await res.json();
+                console.error('Failed to remove position:', err.error);
             }
         } catch (e) {
             console.error('Error removing holding:', e);
         }
     }
 
+    // ── AUTHENTICATION FUNCTIONS ─────────────────────────────────────
+    function openAuthModal() {
+        authModal.removeAttribute('hidden');
+        document.body.style.overflow = 'hidden';
+        switchAuthMode('login');
+    }
+
+    function closeAuthModal() {
+        authModal.setAttribute('hidden', '');
+        document.body.style.overflow = '';
+        clearAuthInputs();
+    }
+
+    function switchAuthMode(mode) {
+        authMode = mode;
+        clearAuthError();
+
+        if (mode === 'login') {
+            tabLogin.classList.add('active');
+            tabLogin.setAttribute('aria-selected', 'true');
+            tabSignup.classList.remove('active');
+            tabSignup.setAttribute('aria-selected', 'false');
+            groupConfirmPassword.style.display = 'none';
+            authConfirmPassword.removeAttribute('required');
+            btnAuthSubmit.querySelector('.auth-submit-text').textContent = 'Sign In';
+        } else {
+            tabSignup.classList.add('active');
+            tabSignup.setAttribute('aria-selected', 'true');
+            tabLogin.classList.remove('active');
+            tabLogin.setAttribute('aria-selected', 'false');
+            groupConfirmPassword.style.display = 'block';
+            authConfirmPassword.setAttribute('required', '');
+            btnAuthSubmit.querySelector('.auth-submit-text').textContent = 'Register';
+        }
+    }
+
+    function clearAuthInputs() {
+        authEmail.value = '';
+        authPassword.value = '';
+        authConfirmPassword.value = '';
+        clearAuthError();
+    }
+
+    function setAuthLoading(isLoading) {
+        const submitText = btnAuthSubmit.querySelector('.auth-submit-text');
+        const spinner = btnAuthSubmit.querySelector('.auth-spinner');
+
+        if (isLoading) {
+            btnAuthSubmit.setAttribute('disabled', '');
+            submitText.setAttribute('hidden', '');
+            spinner.removeAttribute('hidden');
+        } else {
+            btnAuthSubmit.removeAttribute('disabled');
+            submitText.removeAttribute('hidden');
+            spinner.setAttribute('hidden', '');
+        }
+    }
+
+    function showAuthError(message) {
+        authError.textContent = message;
+        authError.removeAttribute('hidden');
+    }
+
+    function clearAuthError() {
+        authError.textContent = '';
+        authError.setAttribute('hidden', '');
+    }
+
+    async function handleAuthSubmit(e) {
+        e.preventDefault();
+        clearAuthError();
+
+        const email = authEmail.value.trim();
+        const password = authPassword.value;
+
+        if (!email || !password) return;
+
+        setAuthLoading(true);
+
+        try {
+            if (authMode === 'login') {
+                await firebase.auth().signInWithEmailAndPassword(email, password);
+            } else {
+                const confirmPassword = authConfirmPassword.value;
+                if (password !== confirmPassword) {
+                    throw new Error("Passwords do not match");
+                }
+                await firebase.auth().createUserWithEmailAndPassword(email, password);
+            }
+        } catch (error) {
+            console.error('Authentication error:', error);
+            let userMsg = error.message;
+            if (error.code === 'auth/invalid-email') {
+                userMsg = 'Invalid email address format.';
+            } else if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
+                userMsg = 'Incorrect email or password.';
+            } else if (error.code === 'auth/email-already-in-use') {
+                userMsg = 'This email is already registered.';
+            } else if (error.code === 'auth/weak-password') {
+                userMsg = 'Password must be at least 6 characters.';
+            }
+            showAuthError(userMsg);
+        } finally {
+            setAuthLoading(false);
+        }
+    }
+
+    async function handleGoogleAuth() {
+        clearAuthError();
+        const provider = new firebase.auth.GoogleAuthProvider();
+        try {
+            await firebase.auth().signInWithPopup(provider);
+        } catch (error) {
+            console.error('Google Auth failure:', error);
+            showAuthError(error.message || 'Google sign-in was cancelled or encountered an error.');
+        }
+    }
+
+    async function handleSignout() {
+        try {
+            await firebase.auth().signOut();
+            closePortfolio();
+        } catch (e) {
+            console.error('Sign out error:', e);
+        }
+    }
+
     // ── SEARCH AUTOCOMPLETE ──────────────────────────────────────────
     async function handleAutocomplete(query) {
         try {
-            const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+            const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(query)}`);
             const data = await res.json();
             
             const results = (res.ok && data.results) ? data.results : [];
@@ -290,11 +769,9 @@ document.addEventListener('DOMContentLoaded', () => {
             div.className = 'autocomplete-item';
             div.role = 'option';
             div.innerHTML = `
-                <span class="ac-symbol">${item.symbol}</span>
-                <div class="ac-meta">
-                    <span class="ac-name">${item.name}</span>
-                    <span class="ac-sector">${item.sector}</span>
-                </div>
+                <span class="autocomplete-ticker">${item.symbol}</span>
+                <span class="autocomplete-name">${item.name}</span>
+                <span class="autocomplete-sector">${item.sector}</span>
             `;
             div.addEventListener('click', () => {
                 searchInput.value = item.symbol;
@@ -314,11 +791,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 customDiv.className = 'autocomplete-item custom-ticker-item';
                 customDiv.role = 'option';
                 customDiv.innerHTML = `
-                    <span class="ac-symbol">${cleanedQuery}</span>
-                    <div class="ac-meta">
-                        <span class="ac-name">Analyze "${cleanedQuery}" as custom PSX ticker...</span>
-                        <span class="ac-sector">External Query</span>
-                    </div>
+                    <span class="autocomplete-ticker">${cleanedQuery}</span>
+                    <span class="autocomplete-name">Analyze "${cleanedQuery}" as custom PSX ticker...</span>
+                    <span class="autocomplete-sector">External Query</span>
                 `;
                 customDiv.addEventListener('click', () => {
                     searchInput.value = cleanedQuery;
@@ -362,7 +837,7 @@ document.addEventListener('DOMContentLoaded', () => {
         recentList.innerHTML = '';
         recentSearches.forEach(sym => {
             const button = document.createElement('button');
-            button.className = 'recent-item btn btn-ghost btn-sm';
+            button.className = 'recent-chip';
             button.textContent = sym;
             button.addEventListener('click', () => {
                 searchInput.value = sym;
@@ -406,10 +881,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, u.delay);
             });
 
+            // Build headers with Authorization Bearer if user is logged in
+            const headers = { 'Content-Type': 'application/json' };
+            const user = firebase.auth().currentUser;
+            if (user) {
+                try {
+                    const token = await user.getIdToken();
+                    headers['Authorization'] = `Bearer ${token}`;
+                } catch (tokenErr) {
+                    console.error('Failed to get Auth token:', tokenErr);
+                }
+            }
+
             // Send actual POST to backend analyzer
-            const res = await fetch('/api/analyze', {
+            const res = await fetch(`${API_BASE}/api/analyze`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify({
                     symbol: symbol,
                     include_portfolio: true
@@ -512,36 +999,36 @@ document.addEventListener('DOMContentLoaded', () => {
         quoteCard.innerHTML = `
             <div class="quote-header">
                 <div>
-                    <div class="quote-title-row">
+                    <div style="display: flex; align-items: center; gap: 10px;">
                         <h2 class="quote-symbol data-font">${quote.symbol}</h2>
                         ${icon}
                     </div>
-                    <p class="quote-company">${name}</p>
-                    <span class="badge quote-sector">${sector}</span>
+                    <p class="quote-name">${name}</p>
+                    <span class="badge badge--info" style="margin-top: 4px;">${sector}</span>
                 </div>
-                <div class="quote-price-block">
+                <div class="quote-price-group">
                     <div class="quote-price data-font">PKR ${formatNumberWithCommas(quote.price)}</div>
                     <div class="quote-change data-font ${pnlClass}">
                         ${formatPercent(quote.change_pct)} (${quote.change >= 0 ? '+' : ''}${quote.change.toFixed(2)})
                     </div>
                 </div>
             </div>
-            <div class="quote-grid">
-                <div class="quote-metric">
-                    <span class="quote-metric-label">Volume</span>
-                    <span class="quote-metric-value data-font">${formatCompactNumber(quote.volume)}</span>
+            <div class="quote-stats">
+                <div class="quote-stat">
+                    <span class="quote-stat-label">Volume</span>
+                    <span class="quote-stat-value data-font">${formatCompactNumber(quote.volume)}</span>
                 </div>
-                <div class="quote-metric">
-                    <span class="quote-metric-label">Market Cap</span>
-                    <span class="quote-metric-value data-font">${formatCompactNumber(quote.market_cap)}</span>
+                <div class="quote-stat">
+                    <span class="quote-stat-label">Market Cap</span>
+                    <span class="quote-stat-value data-font">${formatCompactNumber(quote.market_cap)}</span>
                 </div>
-                <div class="quote-metric">
-                    <span class="quote-metric-label">High / Low (Day)</span>
-                    <span class="quote-metric-value data-font">${formatNumberRaw(quote.day_high)} / ${formatNumberRaw(quote.day_low)}</span>
+                <div class="quote-stat">
+                    <span class="quote-stat-label">High / Low (Day)</span>
+                    <span class="quote-stat-value data-font">${formatNumberRaw(quote.day_high)} / ${formatNumberRaw(quote.day_low)}</span>
                 </div>
-                <div class="quote-metric">
-                    <span class="quote-metric-label">Open</span>
-                    <span class="quote-metric-value data-font">${formatNumberRaw(quote.open)}</span>
+                <div class="quote-stat">
+                    <span class="quote-stat-label">Open</span>
+                    <span class="quote-stat-value data-font">${formatNumberRaw(quote.open)}</span>
                 </div>
             </div>
         `;
@@ -555,45 +1042,39 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Set Trend Badge
         const trend = report.trend.toUpperCase();
         badgeTechnicalTrend.textContent = trend;
         badgeTechnicalTrend.className = `badge badge--${getTrendClass(trend)}`;
 
-        // List key indicator readings
-        let signalsHtml = '<ul class="indicator-list">';
+        let signalsHtml = '<ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">';
         if (report.signals && report.signals.length > 0) {
             report.signals.forEach(sig => {
                 signalsHtml += `
-                    <li class="indicator-item">
-                        <div class="indicator-info">
-                            <span class="indicator-name">${sig.indicator}</span>
-                            <span class="indicator-reading data-font">${sig.reading}</span>
-                        </div>
-                        <span class="indicator-interpret">${sig.interpretation}</span>
+                    <li class="card-data-row">
+                        <span class="card-data-label">${sig.indicator}: <strong>${sig.reading}</strong></span>
+                        <span class="card-data-value text-muted" style="font-size: 0.8rem;">${sig.interpretation}</span>
                     </li>
                 `;
             });
         }
         signalsHtml += '</ul>';
 
-        // Add Support/Resistance info
         let levelsHtml = '';
         if (report.key_levels) {
             const supports = report.key_levels.support || [];
             const resistances = report.key_levels.resistance || [];
             levelsHtml = `
-                <div class="key-levels-grid">
-                    <div class="key-level-col">
-                        <span class="key-level-title">Support</span>
-                        <div class="key-level-values data-font">
-                            ${supports.map(s => `<span>${formatNumberRaw(s)}</span>`).join('') || '—'}
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0;">
+                    <div style="padding: 10px; background: var(--bg-surface); border-radius: var(--radius-badge); text-align: center;">
+                        <div class="card-data-label" style="font-size: 0.72rem; text-transform: uppercase;">Supports</div>
+                        <div class="data-font" style="font-weight: 700; margin-top: 4px; font-size: 0.9rem;">
+                            ${supports.map(s => s.toFixed(2)).join(' | ') || '—'}
                         </div>
                     </div>
-                    <div class="key-level-col">
-                        <span class="key-level-title">Resistance</span>
-                        <div class="key-level-values data-font">
-                            ${resistances.map(r => `<span>${formatNumberRaw(r)}</span>`).join('') || '—'}
+                    <div style="padding: 10px; background: var(--bg-surface); border-radius: var(--radius-badge); text-align: center;">
+                        <div class="card-data-label" style="font-size: 0.72rem; text-transform: uppercase;">Resistances</div>
+                        <div class="data-font" style="font-weight: 700; margin-top: 4px; font-size: 0.9rem;">
+                            ${resistances.map(r => r.toFixed(2)).join(' | ') || '—'}
                         </div>
                     </div>
                 </div>
@@ -601,13 +1082,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         contentTechnical.innerHTML = `
-            <p class="agent-summary-text">${report.summary}</p>
+            <p class="card-narrative">${report.summary}</p>
             ${levelsHtml}
-            <h4 class="indicator-section-title">Technical Oscillators &amp; Averages</h4>
-            ${signalsHtml}
-            <div class="confidence-footer">
-                <span class="confidence-label">Analyst Confidence:</span>
-                <span class="confidence-score data-font">${report.confidence}/10</span>
+            <div style="margin-top: 14px;">
+                <span class="card-data-label" style="font-weight: 700; display: block; margin-bottom: 6px;">Technical Oscillators</span>
+                ${signalsHtml}
+            </div>
+            <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                <span class="card-data-label">Confidence:</span>
+                <span class="card-data-value data-font" style="color: var(--accent-start); font-weight: 700;">${report.confidence}/10</span>
             </div>
         `;
     }
@@ -620,20 +1103,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Set Verdict Badge
         const verdict = report.valuation_verdict.replace('_', ' ').toUpperCase();
         badgeFundamentalVerdict.textContent = verdict;
         badgeFundamentalVerdict.className = `badge badge--${getValuationClass(report.valuation_verdict)}`;
 
-        // List strengths / concerns
-        let detailsHtml = '<div class="fund-details-grid">';
+        let detailsHtml = '<div style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px;">';
         
         if (report.strengths && report.strengths.length > 0) {
             detailsHtml += `
-                <div class="fund-col">
-                    <span class="fund-col-title fund-col-title--strength">Strengths</span>
-                    <ul class="bullet-list">
-                        ${report.strengths.map(s => `<li>${s}</li>`).join('')}
+                <div>
+                    <span class="card-data-label text-bullish" style="font-weight: 700;">Key Strengths</span>
+                    <ul style="padding-left: 16px; margin-top: 4px; font-size: 0.8rem; color: var(--text-secondary);">
+                        ${report.strengths.map(s => `<li style="margin-bottom: 3px;">${s}</li>`).join('')}
                     </ul>
                 </div>
             `;
@@ -641,34 +1122,35 @@ document.addEventListener('DOMContentLoaded', () => {
         
         if (report.concerns && report.concerns.length > 0) {
             detailsHtml += `
-                <div class="fund-col">
-                    <span class="fund-col-title fund-col-title--concern">Risks &amp; Concerns</span>
-                    <ul class="bullet-list">
-                        ${report.concerns.map(c => `<li>${c}</li>`).join('')}
+                <div>
+                    <span class="card-data-label text-bearish" style="font-weight: 700;">Risks &amp; Weaknesses</span>
+                    <ul style="padding-left: 16px; margin-top: 4px; font-size: 0.8rem; color: var(--text-secondary);">
+                        ${report.concerns.map(c => `<li style="margin-bottom: 3px;">${c}</li>`).join('')}
                     </ul>
                 </div>
             `;
         }
         detailsHtml += '</div>';
 
-        // Valuation Range
         let rangeHtml = '';
         if (report.fair_value_range) {
             rangeHtml = `
-                <div class="valuation-range-box">
-                    <span class="range-title">Estimated Fair Value Range</span>
-                    <span class="range-value data-font">PKR ${formatNumberRaw(report.fair_value_range.low)} - PKR ${formatNumberRaw(report.fair_value_range.high)}</span>
+                <div style="padding: 12px; background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: var(--radius-badge); text-align: center; margin-top: 12px;">
+                    <span class="card-data-label" style="font-size: 0.72rem; text-transform: uppercase;">Estimated Fair Value Range</span>
+                    <div class="data-font" style="font-size: 1.1rem; font-weight: 700; color: var(--accent-start); margin-top: 4px;">
+                        PKR ${formatNumberRaw(report.fair_value_range.low)} - PKR ${formatNumberRaw(report.fair_value_range.high)}
+                    </div>
                 </div>
             `;
         }
 
         contentFundamental.innerHTML = `
-            <p class="agent-summary-text">${report.summary}</p>
+            <p class="card-narrative">${report.summary}</p>
             ${rangeHtml}
             ${detailsHtml}
-            <div class="confidence-footer">
-                <span class="confidence-label">Analyst Confidence:</span>
-                <span class="confidence-score data-font">${report.confidence}/10</span>
+            <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                <span class="card-data-label">Confidence:</span>
+                <span class="card-data-value data-font" style="color: var(--accent-start); font-weight: 700;">${report.confidence}/10</span>
             </div>
         `;
     }
@@ -681,43 +1163,38 @@ document.addEventListener('DOMContentLoaded', () => {
         let narrativesHtml = '';
         if (report.key_narratives && report.key_narratives.length > 0) {
             narrativesHtml += `
-                <h4 class="indicator-section-title">Key Media Narratives</h4>
-                <ul class="bullet-list">
-                    ${report.key_narratives.map(n => `<li>${n}</li>`).join('')}
-                </ul>
+                <div style="margin-top: 12px;">
+                    <span class="card-data-label" style="font-weight: 700;">Key Sentiment Drivers</span>
+                    <ul style="padding-left: 16px; margin-top: 4px; font-size: 0.8rem; color: var(--text-secondary);">
+                        ${report.key_narratives.map(n => `<li style="margin-bottom: 3px;">${n}</li>`).join('')}
+                    </ul>
+                </div>
             `;
         }
 
-        let catalystsHtml = '<div class="fund-details-grid">';
-        if (report.catalysts_positive && report.catalysts_positive.length > 0) {
-            catalystsHtml += `
-                <div class="fund-col">
-                    <span class="fund-col-title fund-col-title--strength">Positive Anchors</span>
-                    <ul class="bullet-list">
-                        ${report.catalysts_positive.map(c => `<li>${c}</li>`).join('')}
-                    </ul>
+        let sentimentBarHtml = '';
+        if (report.sentiment_score !== undefined) {
+            // Score from -10 to +10, map to 0 to 100%
+            const pct = ((report.sentiment_score + 10) / 20) * 100;
+            sentimentBarHtml = `
+                <div class="sentiment-gauge">
+                    <div class="sentiment-gauge-marker" style="left: ${pct}%;"></div>
+                </div>
+                <div class="sentiment-gauge-labels">
+                    <span>Fear (-10)</span>
+                    <span>Neutral</span>
+                    <span>Greed (+10)</span>
                 </div>
             `;
         }
-        if (report.catalysts_negative && report.catalysts_negative.length > 0) {
-            catalystsHtml += `
-                <div class="fund-col">
-                    <span class="fund-col-title fund-col-title--concern">Negative Anchors</span>
-                    <ul class="bullet-list">
-                        ${report.catalysts_negative.map(c => `<li>${c}</li>`).join('')}
-                    </ul>
-                </div>
-            `;
-        }
-        catalystsHtml += '</div>';
 
         contentSentiment.innerHTML = `
-            <p class="agent-summary-text">${report.summary}</p>
+            <p class="card-narrative">${report.summary}</p>
+            ${sentimentBarHtml}
             ${narrativesHtml}
-            ${catalystsHtml}
-            <div class="confidence-footer">
-                <span class="confidence-label">Analyst Confidence:</span>
-                <span class="confidence-score data-font">${report.confidence}/10</span>
+            <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                <span class="card-data-label">Confidence:</span>
+                <span class="card-data-value data-font" style="color: var(--accent-start); font-weight: 700;">${report.confidence}/10</span>
             </div>
         `;
     }
@@ -734,77 +1211,73 @@ document.addEventListener('DOMContentLoaded', () => {
         badgeRiskLevel.textContent = `RISK: ${risk}`;
         badgeRiskLevel.className = `badge badge--${getRiskClass(report.risk_level)}`;
 
-        // List specific factors
-        let factorsHtml = '<ul class="indicator-list">';
+        let factorsHtml = '<ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">';
         if (report.risk_factors && report.risk_factors.length > 0) {
             report.risk_factors.forEach(rf => {
                 factorsHtml += `
-                    <li class="indicator-item">
-                        <div class="indicator-info">
-                            <span class="indicator-name">${rf.factor}</span>
-                            <span class="badge badge--${getSeverityClass(rf.severity)}">${rf.severity.toUpperCase()}</span>
-                        </div>
-                        <span class="indicator-interpret">${rf.detail}</span>
+                    <li class="card-data-row">
+                        <span class="card-data-label">${rf.factor}</span>
+                        <span class="badge badge--${getSeverityClass(rf.severity)}" style="font-size: 0.65rem; padding: 2px 6px;">${rf.severity.toUpperCase()}</span>
                     </li>
+                    <p style="font-size: 0.78rem; color: var(--text-secondary); margin-left: 0px; margin-bottom: 6px; line-height: 1.4;">${rf.detail}</p>
                 `;
             });
         }
         factorsHtml += '</ul>';
 
-        // Sizing guidelines
         const maxPos = report.max_position_pct ? `${report.max_position_pct}%` : 'N/A';
         const stopLoss = report.stop_loss_pct ? `${report.stop_loss_pct}%` : 'N/A';
 
-        contentRisk.innerHTML = `
-            <p class="agent-summary-text">${report.summary}</p>
-            <div class="risk-limits-row">
-                <div class="risk-limit-box">
-                    <span class="limit-label">Max Position Size</span>
-                    <span class="limit-value data-font">${maxPos}</span>
+        let sizingHtml = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0;">
+                <div style="padding: 10px; background: var(--bg-surface); border-radius: var(--radius-badge); text-align: center;">
+                    <div class="card-data-label" style="font-size: 0.72rem; text-transform: uppercase;">Max Position</div>
+                    <div class="data-font" style="font-weight: 700; margin-top: 4px; font-size: 1.1rem; color: var(--accent-start);">${maxPos}</div>
                 </div>
-                <div class="risk-limit-box">
-                    <span class="limit-label">Recommended Stop-Loss</span>
-                    <span class="limit-value data-font">${stopLoss}</span>
+                <div style="padding: 10px; background: var(--bg-surface); border-radius: var(--radius-badge); text-align: center;">
+                    <div class="card-data-label" style="font-size: 0.72rem; text-transform: uppercase;">Stop Loss</div>
+                    <div class="data-font" style="font-weight: 700; margin-top: 4px; font-size: 1.1rem; color: var(--bearish);">${stopLoss}</div>
                 </div>
             </div>
-            <h4 class="indicator-section-title">Risk Exposure Matrix</h4>
-            ${factorsHtml}
-            <div class="confidence-footer">
-                <span class="confidence-label">Analyst Confidence:</span>
-                <span class="confidence-score data-font">${report.confidence}/10</span>
+        `;
+
+        contentRisk.innerHTML = `
+            <p class="card-narrative">${report.summary}</p>
+            ${sizingHtml}
+            <div>
+                <span class="card-data-label" style="font-weight: 700; display: block; margin-bottom: 4px;">Identified Risk Elements</span>
+                ${factorsHtml}
+            </div>
+            <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                <span class="card-data-label">Confidence:</span>
+                <span class="card-data-value data-font" style="color: var(--accent-start); font-weight: 700;">${report.confidence}/10</span>
             </div>
         `;
     }
 
     function renderDebate(debate) {
-        // Bull Thesis & Arguments
-        let bullHtml = `<p class="debate-thesis"><strong>Thesis:</strong> ${debate.bull_thesis}</p>`;
+        let bullHtml = `<p class="card-narrative" style="margin-bottom: 12px; background: rgba(16, 185, 129, 0.05); border-left: 3px solid var(--bullish); font-style: italic;">"${debate.bull_thesis}"</p>`;
         if (debate.bull_arguments && debate.bull_arguments.length > 0) {
-            bullHtml += '<ul class="debate-points">';
             debate.bull_arguments.forEach(arg => {
                 bullHtml += `
-                    <li>
-                        <span class="debate-point-title">${arg.point}</span>
-                        <p class="debate-point-desc">${arg.evidence}</p>
-                    </li>
+                    <div style="margin-bottom: 10px;">
+                        <span class="card-data-label text-bullish" style="font-weight: 700; font-size: 0.82rem;">▲ ${arg.point}</span>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px; line-height: 1.4;">${arg.evidence}</p>
+                    </div>
                 `;
             });
-            bullHtml += '</ul>';
         }
 
-        // Bear Thesis & Arguments
-        let bearHtml = `<p class="debate-thesis"><strong>Thesis:</strong> ${debate.bear_thesis}</p>`;
+        let bearHtml = `<p class="card-narrative" style="margin-bottom: 12px; background: rgba(244, 63, 94, 0.05); border-left: 3px solid var(--bearish); font-style: italic;">"${debate.bear_thesis}"</p>`;
         if (debate.bear_arguments && debate.bear_arguments.length > 0) {
-            bearHtml += '<ul class="debate-points">';
             debate.bear_arguments.forEach(arg => {
                 bearHtml += `
-                    <li>
-                        <span class="debate-point-title">${arg.point}</span>
-                        <p class="debate-point-desc">${arg.evidence}</p>
-                    </li>
+                    <div style="margin-bottom: 10px;">
+                        <span class="card-data-label text-bearish" style="font-weight: 700; font-size: 0.82rem;">▼ ${arg.point}</span>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px; line-height: 1.4;">${arg.evidence}</p>
+                    </div>
                 `;
             });
-            bearHtml += '</ul>';
         }
 
         debateBullContent.innerHTML = bullHtml;
@@ -812,18 +1285,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderVerdict(rec) {
-        // 1. Recommendation Badge
         const recommendation = rec.recommendation.toUpperCase();
         verdictBadge.textContent = recommendation;
         verdictBadge.className = `verdict-badge verdict-badge--${getVerdictClass(recommendation)}`;
 
-        // Set card glowing boundary styling
         const verdictCard = document.getElementById('verdict-card');
         verdictCard.className = `verdict-card glass-card verdict-card--glow-${getVerdictClass(recommendation)} animate-in`;
 
-        // 2. Circular Confidence meter
-        // Perimeter = 2 * PI * r = 2 * 3.14159 * 42 = 263.89
-        const perimeter = 263.89;
+        // Update Confidence Meter
+        const perimeter = 263.89; // 2 * PI * 42
         const confidence = rec.confidence || 0;
         const offset = perimeter - (confidence / 10) * perimeter;
         
@@ -831,15 +1301,15 @@ document.addEventListener('DOMContentLoaded', () => {
         confidenceCircle.style.strokeDashoffset = offset;
         confidenceValue.textContent = `${confidence}/10`;
 
-        // 3. Price Target Display
+        // Price Target Display
         priceTargetLow.textContent = formatCurrency(rec.price_target_low);
         priceTargetHigh.textContent = formatCurrency(rec.price_target_high);
 
-        // 4. Catalysts and Risks Bullet list
+        // Catalysts and Risks Bullet lists
         catalystsList.innerHTML = (rec.catalysts || []).map(c => `<li>${c}</li>`).join('') || '<li>None identified</li>';
         risksList.innerHTML = (rec.risks || []).map(r => `<li>${r}</li>`).join('') || '<li>None identified</li>';
 
-        // 5. Position Specific Advice
+        // Position Specific Advice Context
         if (rec.position_advice) {
             verdictPositionAdvice.removeAttribute('hidden');
             positionAdviceText.textContent = rec.position_advice;
@@ -847,7 +1317,7 @@ document.addEventListener('DOMContentLoaded', () => {
             verdictPositionAdvice.setAttribute('hidden', '');
         }
 
-        // 6. Summary / Executive Reasoning
+        // Summary Reasoning Text
         if (rec.summary) {
             verdictReasoning.removeAttribute('hidden');
             reasoningText.textContent = rec.summary;
@@ -888,19 +1358,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function formatNumberRaw(val) {
-        if (val === undefined || val === null || isNaN(val)) return '—';
-        return Number(val).toFixed(2);
-    }
-
-    function formatNumberRaw(val) {
-        if (val === undefined || val === null || isNaN(val)) return '—';
-        return Number(val).toLocaleString('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        });
-    }
-
     function formatPercent(val) {
         if (val === undefined || val === null || isNaN(val)) return '0.00%';
         const sign = val >= 0 ? '+' : '';
@@ -918,12 +1375,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getPriceColorClass(changeVal) {
-        if (changeVal > 0) return 'text-success';
-        if (changeVal < 0) return 'text-danger';
+        if (changeVal > 0) return 'text-bullish';
+        if (changeVal < 0) return 'text-bearish';
         return 'text-neutral';
     }
 
-    // Color mapper helpers for badges
     function getTrendClass(trend) {
         trend = trend.toLowerCase();
         if (trend === 'bullish') return 'bullish';

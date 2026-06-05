@@ -13,6 +13,14 @@ GEMINI_MAX_OUTPUT_TOKENS = 4096
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+# Clean up FIREBASE_CONFIG env var on Windows if it has bad escaping
+firebase_config = os.environ.get("FIREBASE_CONFIG")
+if firebase_config:
+    cleaned = firebase_config.replace('\\"', '"')
+    if cleaned.startswith('"') and cleaned.endswith('"') and cleaned.count('{') > 0:
+        cleaned = cleaned[1:-1]
+    os.environ["FIREBASE_CONFIG"] = cleaned
+
 # Initialize Firebase App
 firebase_db = None
 try:

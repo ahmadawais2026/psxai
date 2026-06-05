@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 from config import firebase_db
+from firebase_admin import firestore
 from data.market_data import get_quote
 
 logger = logging.getLogger(__name__)
@@ -24,11 +25,18 @@ class PortfolioManager:
         if self.db is None:
             logger.error("Firestore database client is not initialized.")
 
-    def add_holding(self, symbol: str, shares: float, avg_cost: float) -> bool:
+    def _get_holdings_ref(self, uid: str) -> firestore.CollectionReference:
+        """Helper to get user's holdings collection reference."""
+        if not self.db:
+            raise ValueError("Firestore client not initialized")
+        return self.db.collection("users").document(uid).collection("holdings")
+
+    def add_holding(self, uid: str, symbol: str, shares: float, avg_cost: float) -> bool:
         """
         Add or update a holding position in Firestore.
         
         Args:
+            uid: User's unique Firebase authentication ID
             symbol: Stock symbol without .KA suffix (e.g. 'OGDC')
             shares: Number of shares owned
             avg_cost: Average acquisition price
@@ -43,23 +51,24 @@ class PortfolioManager:
             return False
 
         try:
-            doc_ref = self.db.collection("holdings").document(symbol)
-            doc_ref.set({
+            self._get_holdings_ref(uid).document(symbol).set({
                 "symbol": symbol,
                 "shares": shares,
-                "avg_cost": avg_cost
+                "avg_cost": avg_cost,
+                "updated_at": firestore.SERVER_TIMESTAMP
             })
-            logger.info(f"Updated Firestore holding: {symbol} - {shares} shares @ PKR {avg_cost}")
+            logger.info(f"Updated holding for user {uid}: {symbol} - {shares} shares @ PKR {avg_cost}")
             return True
         except Exception as e:
-            logger.error(f"Error adding holding for {symbol} to Firestore: {e}")
+            logger.error(f"Error adding holding for {symbol} (user {uid}): {e}")
             return False
 
-    def remove_holding(self, symbol: str) -> bool:
+    def remove_holding(self, uid: str, symbol: str) -> bool:
         """
         Remove a holding position entirely from Firestore.
         
         Args:
+            uid: User's unique Firebase authentication ID
             symbol: Stock symbol without .KA suffix (e.g. 'OGDC')
         """
         symbol = symbol.strip().upper()
@@ -68,23 +77,25 @@ class PortfolioManager:
             return False
 
         try:
-            doc_ref = self.db.collection("holdings").document(symbol)
-            doc = doc_ref.get()
-            if doc.exists:
-                doc_ref.delete()
-                logger.info(f"Removed Firestore holding: {symbol}")
-                return True
-            else:
-                logger.warning(f"Holding not found to remove from Firestore: {symbol}")
+            doc_ref = self._get_holdings_ref(uid).document(symbol)
+            if not doc_ref.get().exists:
+                logger.warning(f"Holding not found to remove: {symbol} (user {uid})")
                 return False
+                
+            doc_ref.delete()
+            logger.info(f"Removed holding for user {uid}: {symbol}")
+            return True
         except Exception as e:
-            logger.error(f"Error removing holding for {symbol} from Firestore: {e}")
+            logger.error(f"Error removing holding for {symbol} (user {uid}): {e}")
             return False
 
-    def get_holdings(self) -> List[Dict[str, Any]]:
+    def get_holdings(self, uid: str) -> List[Dict[str, Any]]:
         """
         Get all holdings from Firestore with current valuation and calculated P&L.
         
+        Args:
+            uid: User's unique Firebase authentication ID
+            
         Returns:
             List of dicts: {symbol, shares, avg_cost, current_price, current_value, cost_basis, pnl, pnl_pct}
         """
@@ -94,12 +105,15 @@ class PortfolioManager:
             return holdings
 
         try:
-            docs = self.db.collection("holdings").stream()
+            docs = self._get_holdings_ref(uid).stream()
             for doc in docs:
-                data = doc.to_dict()
-                symbol = data.get("symbol", doc.id).upper()
+                data = doc.to_dict() or {}
+                symbol = data.get("symbol")
                 shares = float(data.get("shares", 0.0))
                 avg_cost = float(data.get("avg_cost", 0.0))
+                
+                if not symbol:
+                    continue
                 
                 # Fetch current quote
                 current_price = 0.0
@@ -123,18 +137,21 @@ class PortfolioManager:
                     "pnl_pct": pnl_pct
                 })
         except Exception as e:
-            logger.error(f"Error retrieving holdings from Firestore: {e}")
+            logger.error(f"Error retrieving holdings for user {uid}: {e}")
             
         return holdings
 
-    def get_portfolio_summary(self) -> Dict[str, Any]:
+    def get_portfolio_summary(self, uid: str) -> Dict[str, Any]:
         """
         Calculate and return overall portfolio summary metrics from Firestore holdings.
         
+        Args:
+            uid: User's unique Firebase authentication ID
+            
         Returns:
             Dict: {total_value, total_cost, total_pnl, total_pnl_pct, holdings}
         """
-        holdings = self.get_holdings()
+        holdings = self.get_holdings(uid)
         total_value = sum(h["current_value"] for h in holdings)
         total_cost = sum(h["cost_basis"] for h in holdings)
         total_pnl = total_value - total_cost
@@ -152,18 +169,19 @@ class PortfolioManager:
             "holdings": holdings
         }
 
-    def get_position_context(self, symbol: str) -> Dict[str, Any]:
+    def get_position_context(self, uid: str, symbol: str) -> Dict[str, Any]:
         """
         Get context for a specific ticker to enable position-aware advice.
         
         Args:
+            uid: User's unique Firebase authentication ID
             symbol: Stock symbol without .KA suffix
             
         Returns:
             Dict: {owns_stock, shares, avg_cost, current_value, portfolio_pct, is_concentrated}
         """
         symbol = symbol.strip().upper()
-        summary = self.get_portfolio_summary()
+        summary = self.get_portfolio_summary(uid)
         
         # Check if stock exists in portfolio
         target_holding = None
