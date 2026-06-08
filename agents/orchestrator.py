@@ -22,6 +22,7 @@ from agents.risk_analyst import RiskAnalystAgent
 from agents.research_team import ResearchTeam
 from agents.portfolio_manager import PortfolioManagerAgent
 from agents.prompts import DISCLAIMER
+from data.local_data import get_market_context, get_financials_text, get_research_reports, get_local_company_news
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class Orchestrator:
 
         # ── Cache Miss: Run Full Pipeline ────────────────────────
         logger.info(f"Cache miss for analysis of symbol: {symbol}. Running full pipeline...")
-        
+
         # Fetch current quote first to validate the ticker
         quote = get_quote(symbol)
         if not quote or "error" in quote:
@@ -100,7 +101,7 @@ class Orchestrator:
         # ── Step 1: Validate Ticker & Retrieve metadata ───────────
         company_name = symbol
         sector = "Unknown"
-        
+
         # Look up in curated PSX tickers
         if symbol in PSX_TICKERS:
             ticker_info = PSX_TICKERS[symbol]
@@ -112,7 +113,7 @@ class Orchestrator:
             # Clean up comma-separated yfinance fund names if present
             if "," in company_name and (".KA" in company_name or symbol in company_name):
                 company_name = company_name.split(",")[0].replace(".KA", "").strip()
-            
+
             try:
                 from data.market_data import get_fundamentals
                 fund = get_fundamentals(symbol)
@@ -121,6 +122,27 @@ class Orchestrator:
                     sector = "Unknown"
             except Exception:
                 sector = "Unknown"
+
+        # ── Step 2: Pre-fetch live data & build shared context ────
+        # Fetch fresh company news from AskAnalyst (non-blocking — failure is OK)
+        try:
+            from data.live_scraper import fetch_company_news_live, refresh_market_news
+            logger.info(f"Fetching live company news for {symbol}...")
+            fetch_company_news_live(symbol)
+            logger.info("Refreshing general market news...")
+            refresh_market_news()
+        except Exception as e:
+            logger.warning(f"Live news pre-fetch failed (non-fatal): {e}")
+
+        # Build the rich context bundle passed to every agent
+        agent_context = {
+            "sector": sector,
+            "company_name": company_name,
+            "market_context": get_market_context(sector=sector),
+            "financials_text": get_financials_text(symbol),
+            "research_reports": get_research_reports(symbol, sector=sector, max_reports=5),
+            "company_news": get_local_company_news(symbol),
+        }
 
         # To build a clean general cache entry, we run the analysts with empty portfolio context
         general_context = {
@@ -131,19 +153,19 @@ class Orchestrator:
             "portfolio_pct": 0.0,
             "is_concentrated": False
         }
-        
+
         # ── Step 3: Run Analyst Agents (Sequential due to rate limits) ──
         # Technical Analyst
-        tech_report = self.technical_analyst.analyze(symbol)
-        
+        tech_report = self.technical_analyst.analyze(symbol, context=agent_context)
+
         # Fundamental Analyst
-        fund_report = self.fundamentals_analyst.analyze(symbol)
-        
+        fund_report = self.fundamentals_analyst.analyze(symbol, context=agent_context)
+
         # Sentiment Analyst
-        sent_report = self.sentiment_analyst.analyze(symbol)
-        
+        sent_report = self.sentiment_analyst.analyze(symbol, context=agent_context)
+
         # Risk Analyst with general context
-        risk_report = self.risk_analyst.analyze(symbol, portfolio_context=general_context)
+        risk_report = self.risk_analyst.analyze(symbol, portfolio_context=general_context, context=agent_context)
         
         # Compile analyst reports dictionary
         analyst_reports = {

@@ -7,17 +7,15 @@ and sends the risk metrics to Gemini for qualitative assessment of macro and cor
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from typing import Any, Dict, Optional
 
 from agents.base_agent import BaseAgent
 from agents.prompts import ANALYSIS_PROMPT_TEMPLATE, RISK_ANALYST_PERSONA
-from config import HISTORY_PERIOD_DAILY, PSX_SUFFIX
+from config import HISTORY_PERIOD_DAILY
 from data.market_data import get_history, get_quote
 
 logger = logging.getLogger(__name__)
@@ -32,7 +30,8 @@ class RiskAnalystAgent(BaseAgent):
             persona=RISK_ANALYST_PERSONA,
         )
 
-    def analyze(self, symbol: str, portfolio_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def analyze(self, symbol: str, portfolio_context: Optional[Dict[str, Any]] = None,
+                context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Run a full risk analysis for *symbol*.
 
         Pipeline:
@@ -74,7 +73,7 @@ class RiskAnalystAgent(BaseAgent):
             quote = {}
 
         # ── Step 4: Format data blob ─────────────────────────────
-        data_blob = self._build_data_blob(symbol, quote, metrics, portfolio_context)
+        data_blob = self._build_data_blob(symbol, quote, metrics, portfolio_context, context or {})
 
         # ── Step 5: Query Gemini ──────────────────────────────────
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(data=data_blob)
@@ -142,7 +141,8 @@ class RiskAnalystAgent(BaseAgent):
         symbol: str,
         quote: Dict[str, Any],
         metrics: Dict[str, Any],
-        portfolio_context: Optional[Dict[str, Any]]
+        portfolio_context: Optional[Dict[str, Any]],
+        context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Compose a human-readable risk description block."""
         lines = [
@@ -174,6 +174,13 @@ class RiskAnalystAgent(BaseAgent):
                 "  No current portfolio holdings context provided. Evaluate stock risk in isolation.",
                 ""
             ])
+
+        # Macro and sector context for Pakistan-specific risk factors
+        if context:
+            from data.local_data import format_market_context_text
+            ctx_text = format_market_context_text(context.get("market_context", {}))
+            if ctx_text:
+                lines.extend(["── PAKISTAN MACRO & SECTOR CONTEXT ──", ctx_text, ""])
 
         return "\n".join(lines)
 

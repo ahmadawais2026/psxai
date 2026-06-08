@@ -9,7 +9,6 @@ interpretation.  The LLM never touches raw math.
 from __future__ import annotations
 
 import json
-import traceback
 from typing import Any, Dict, Optional
 
 from agents.base_agent import BaseAgent
@@ -30,7 +29,7 @@ class TechnicalAnalystAgent(BaseAgent):
 
     # ── Public API ────────────────────────────────────────────────
 
-    def analyze(self, symbol: str) -> Dict[str, Any]:
+    def analyze(self, symbol: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Run a full technical analysis for *symbol*.
 
         Pipeline
@@ -83,7 +82,7 @@ class TechnicalAnalystAgent(BaseAgent):
             quote = {}
 
         # ── Step 5: Prepare data blob for the LLM ────────────────
-        data_blob = self._build_data_blob(symbol, quote, indicators, trend_text, df)
+        data_blob = self._build_data_blob(symbol, quote, indicators, trend_text, df, context or {})
 
         # ── Step 6: Query Gemini ──────────────────────────────────
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(data=data_blob)
@@ -105,7 +104,8 @@ class TechnicalAnalystAgent(BaseAgent):
         quote: Dict[str, Any],
         indicators: Dict[str, Any],
         trend_text: str,
-        df: "pd.DataFrame",
+        df: Any,
+        context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Compose a human-readable text block from all data sources."""
         lines = [
@@ -157,6 +157,13 @@ class TechnicalAnalystAgent(BaseAgent):
 
         # Trend summary.
         lines.extend(["", "── TREND SUMMARY ──", trend_text])
+
+        # Market briefing and macro context
+        if context:
+            from data.local_data import format_market_context_text
+            ctx_text = format_market_context_text(context.get("market_context", {}))
+            if ctx_text:
+                lines.extend(["", "── BROADER MARKET CONTEXT ──", ctx_text])
 
         return "\n".join(lines)
 

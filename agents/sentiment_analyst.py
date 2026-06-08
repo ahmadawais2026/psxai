@@ -7,8 +7,7 @@ and potential sentiment catalysts specific to the Pakistani market.
 
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from agents.base_agent import BaseAgent
 from agents.prompts import ANALYSIS_PROMPT_TEMPLATE, SENTIMENT_ANALYST_PERSONA
@@ -24,24 +23,37 @@ class SentimentAnalystAgent(BaseAgent):
             persona=SENTIMENT_ANALYST_PERSONA,
         )
 
-    def analyze(self, symbol: str) -> Dict[str, Any]:
+    def analyze(self, symbol: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Run sentiment analysis for *symbol*.
 
         Pipeline:
-        1. Fetch news articles from the data layer.
-        2. Format headlines and sources.
-        3. Query Gemini to classify overall sentiment, key catalysts, and narratives.
+        1. Fetch news from local files (company-specific + general PSX news).
+        2. Fall back to yfinance news if nothing found locally.
+        3. Enrich with broker research reports from context.
+        4. Query Gemini to classify sentiment, catalysts, and narratives.
         """
         self._log(f"Starting sentiment analysis for {symbol} …")
+        ctx = context or {}
 
-        try:
-            articles = get_stock_news(symbol, max_articles=10)
-            self._log(f"Fetched {len(articles)} news articles.")
-        except Exception as exc:
-            self._log(f"News fetch failed: {exc}")
-            articles = []
+        # ── Step 1: Collect news from all sources ─────────────────
+        # Local company-specific news (freshly scraped by live_scraper)
+        local_news = ctx.get("company_news", [])
 
-        if not articles:
+        # yfinance fallback
+        yf_articles: List[Dict[str, Any]] = []
+        if not local_news:
+            try:
+                yf_articles = get_stock_news(symbol, max_articles=10)
+                self._log(f"Fetched {len(yf_articles)} articles from yfinance.")
+            except Exception as exc:
+                self._log(f"yfinance news fetch failed: {exc}")
+
+        articles = local_news if local_news else yf_articles
+        self._log(f"Total news items for sentiment: {len(articles)}")
+
+        research_reports = ctx.get("research_reports", [])
+
+        if not articles and not research_reports:
             return {
                 "agent": self.name,
                 "symbol": symbol,
@@ -58,13 +70,12 @@ class SentimentAnalystAgent(BaseAgent):
             }
 
         # ── Step 2: Compose data blob ─────────────────────────────
-        data_blob = self._build_data_blob(symbol, articles)
+        data_blob = self._build_data_blob(symbol, articles, research_reports)
 
         # ── Step 3: Query Gemini ──────────────────────────────────
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(data=data_blob)
         report = self.query_json(prompt)
 
-        # Attach source articles and metadata
         report["articles"] = articles
         report["agent"] = self.name
         report["symbol"] = symbol
@@ -75,22 +86,27 @@ class SentimentAnalystAgent(BaseAgent):
         )
         return report
 
-    def _build_data_blob(self, symbol: str, articles: List[Dict[str, Any]]) -> str:
-        """Format news articles into a readable text block."""
-        lines = [
-            f"SYMBOL: {symbol}",
-            "RECENT NEWS ARTICLES:",
-            ""
-        ]
-        
-        for idx, art in enumerate(articles, start=1):
-            lines.extend([
-                f"Article #{idx}:",
-                f"  Title: {art.get('title', 'N/A')}",
-                f"  Published: {art.get('published', 'N/A')}",
-                f"  Source: {art.get('source', 'N/A')}",
-                f"  Link: {art.get('link', 'N/A')}",
-                ""
-            ])
-            
+    def _build_data_blob(self, symbol: str, articles: List[Dict[str, Any]],
+                         research_reports: Optional[List[str]] = None) -> str:
+        """Format news articles and broker reports into a readable text block."""
+        lines = [f"SYMBOL: {symbol}", ""]
+
+        if articles:
+            lines.append("── COMPANY NEWS & ANNOUNCEMENTS ──")
+            for idx, art in enumerate(articles[:20], start=1):
+                title = art.get("title") or art.get("Title") or art.get("headline") or "N/A"
+                published = art.get("published") or art.get("date") or art.get("Date") or "N/A"
+                source = art.get("source") or art.get("Source") or art.get("publisher") or "Unknown"
+                lines.extend([
+                    f"  [{idx}] {title}",
+                    f"       Date: {published} | Source: {source}",
+                    ""
+                ])
+
+        if research_reports:
+            lines.append("── BROKER RESEARCH REPORTS ──")
+            for report in research_reports:
+                lines.append(report)
+                lines.append("")
+
         return "\n".join(lines)

@@ -7,13 +7,12 @@ and passes structured financial metrics to Gemini for qualitative valuation.
 
 from __future__ import annotations
 
-import json
-import traceback
 from typing import Any, Dict, Optional
 
 from agents.base_agent import BaseAgent
 from agents.prompts import ANALYSIS_PROMPT_TEMPLATE, FUNDAMENTALS_ANALYST_PERSONA
 from data.market_data import get_fundamentals, get_financial_statements, get_quote
+from data.local_data import format_market_context_text
 
 
 class FundamentalsAnalystAgent(BaseAgent):
@@ -25,14 +24,15 @@ class FundamentalsAnalystAgent(BaseAgent):
             persona=FUNDAMENTALS_ANALYST_PERSONA,
         )
 
-    def analyze(self, symbol: str) -> Dict[str, Any]:
+    def analyze(self, symbol: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Run a full fundamental analysis for *symbol*.
 
         Pipeline:
         1. Fetch fundamentals (P/E, P/B, ROE, debt/equity, dividend yield).
         2. Fetch key financial statements (balance sheet, income, cash flow summaries).
-        3. Format data block for Gemini.
-        4. Query Gemini and obtain structured JSON report.
+        3. Enrich with multi-period local financials and research reports from context.
+        4. Format data block for Gemini.
+        5. Query Gemini and obtain structured JSON report.
         """
         self._log(f"Starting fundamental analysis for {symbol} …")
 
@@ -61,7 +61,7 @@ class FundamentalsAnalystAgent(BaseAgent):
             quote = {}
 
         # ── Step 4: Compose data blob ─────────────────────────────
-        data_blob = self._build_data_blob(symbol, quote, fundamentals, financials)
+        data_blob = self._build_data_blob(symbol, quote, fundamentals, financials, context or {})
 
         # ── Step 5: Query Gemini ──────────────────────────────────
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(data=data_blob)
@@ -81,7 +81,8 @@ class FundamentalsAnalystAgent(BaseAgent):
         symbol: str,
         quote: Dict[str, Any],
         fundamentals: Dict[str, Any],
-        financials: Dict[str, Any]
+        financials: Dict[str, Any],
+        context: Dict[str, Any],
     ) -> str:
         """Format fundamental data into a readable text block."""
         lines = [
@@ -100,7 +101,7 @@ class FundamentalsAnalystAgent(BaseAgent):
             f"  Debt to Equity: {fundamentals.get('debt_equity', 'N/A')}",
             f"  Beta: {fundamentals.get('beta', 'N/A')}",
             "",
-            "── INCOME STATEMENT HIGHLIGHTS ──",
+            "── INCOME STATEMENT HIGHLIGHTS (Firestore/yfinance) ──",
             f"  Revenue (TTM): {financials.get('revenue', 'N/A')}",
             f"  Net Income (TTM): {financials.get('net_income', 'N/A')}",
             f"  Operating Margin: {financials.get('operating_margin', 'N/A')}",
@@ -115,7 +116,22 @@ class FundamentalsAnalystAgent(BaseAgent):
             f"  Operating Cash Flow: {financials.get('operating_cash_flow', 'N/A')}",
             f"  Free Cash Flow: {financials.get('free_cash_flow', 'N/A')}",
         ]
-        
+
+        # Multi-period local financials (8 quarters of trend data)
+        financials_text = context.get("financials_text", "")
+        if financials_text:
+            lines.append("")
+            lines.append(financials_text)
+
+        # Broker research reports mentioning this company or sector
+        reports = context.get("research_reports", [])
+        if reports:
+            lines.append("")
+            lines.append("── BROKER RESEARCH REPORTS ──")
+            for report in reports:
+                lines.append(report)
+                lines.append("")
+
         return "\n".join(lines)
 
     @staticmethod
