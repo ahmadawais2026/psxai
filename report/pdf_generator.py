@@ -20,6 +20,19 @@ from reportlab.platypus import (
     Paragraph, Spacer, Table, TableStyle,
 )
 
+
+def _safe(text: Any) -> str:
+    """Escape HTML special chars so ReportLab's XML parser doesn't crash."""
+    if text is None:
+        return ""
+    s = str(text)
+    s = s.replace("&", "&amp;")
+    s = s.replace("<", "&lt;")
+    s = s.replace(">", "&gt;")
+    # Strip any non-Latin1 characters ReportLab can't render with Helvetica
+    s = s.encode("latin-1", errors="replace").decode("latin-1")
+    return s
+
 # ── Colour palette (matches the web app) ────────────────────────────
 C_GREEN   = colors.HexColor("#10b981")
 C_CYAN    = colors.HexColor("#06b6d4")
@@ -147,12 +160,12 @@ def _two_col_list(left_heading: str, left_items: List[str],
                   right_heading: str, right_items: List[str],
                   col_width: float, st: Dict) -> Table:
     """Side-by-side bullet list table."""
-    rows = [[Paragraph(left_heading, st["sub"]), Paragraph(right_heading, st["sub"])]]
+    rows = [[Paragraph(_safe(left_heading), st["sub"]), Paragraph(_safe(right_heading), st["sub"])]]
     n = max(len(left_items), len(right_items))
     for i in range(min(n, 6)):
-        l = f"▲ {left_items[i]}"  if i < len(left_items)  else ""
-        r = f"▼ {right_items[i]}" if i < len(right_items) else ""
-        rows.append([Paragraph(l, st["body"]), Paragraph(r, st["body"])])
+        l = f"+ {left_items[i]}"  if i < len(left_items)  else ""
+        r = f"- {right_items[i]}" if i < len(right_items) else ""
+        rows.append([Paragraph(_safe(l), st["body"]), Paragraph(_safe(r), st["body"])])
     t = Table(rows, colWidths=[col_width, col_width])
     t.setStyle(TableStyle([
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
@@ -218,9 +231,9 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
 
     # ═══════════════════════════ COVER ══════════════════════════════
     story.append(Spacer(1, 0.6*cm))
-    story.append(Paragraph(name, st["cover_company"]))
-    story.append(Paragraph(f"{sym}  ·  {sector}", st["cover_sub"]))
-    story.append(Paragraph(f"Report Generated: {ts}", st["cover_date"]))
+    story.append(Paragraph(_safe(name), st["cover_company"]))
+    story.append(Paragraph(_safe(f"{sym}  ·  {sector}"), st["cover_sub"]))
+    story.append(Paragraph(_safe(f"Report Generated: {ts}"), st["cover_date"]))
     story.append(Spacer(1, 0.5*cm))
 
     rec_text = rec.get("recommendation", "N/A").upper()
@@ -261,9 +274,9 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     if rec.get("summary"):
         story.append(Paragraph("EXECUTIVE SUMMARY", st["section"]))
         story.append(_hr())
-        story.append(Paragraph(rec["summary"], st["body"]))
+        story.append(Paragraph(_safe(rec["summary"]), st["body"]))
     if rec.get("position_advice"):
-        story.append(Paragraph(f"Position Advice: {rec['position_advice']}", st["italic"]))
+        story.append(Paragraph(_safe(f"Position Advice: {rec['position_advice']}"), st["italic"]))
 
     # Catalysts / Risks
     cats = rec.get("catalysts", []) or []
@@ -297,12 +310,12 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     story.append(Spacer(1, 0.2*cm))
 
     if tech.get("summary"):
-        story.append(Paragraph(tech["summary"], st["body"]))
+        story.append(Paragraph(_safe(tech["summary"]), st["body"]))
 
     # Key levels
     levels = tech.get("key_levels", {}) or {}
-    sup    = levels.get("support", []) or []
-    res    = levels.get("resistance", []) or []
+    sup    = [x for x in (levels.get("support", []) or []) if x]
+    res    = [x for x in (levels.get("resistance", []) or []) if x]
     if sup or res:
         story.append(Paragraph("Key Price Levels", st["sub"]))
         lv = Table(
@@ -330,8 +343,8 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         story.append(Paragraph("Technical Signals", st["sub"]))
         rows = [["Indicator", "Reading", "Interpretation"]]
         for s in sigs[:8]:
-            rows.append([s.get("indicator",""), s.get("reading",""),
-                         Paragraph(s.get("interpretation",""), st["body"])])
+            rows.append([_safe(s.get("indicator","")), _safe(s.get("reading","")),
+                         Paragraph(_safe(s.get("interpretation","")), st["body"])])
         st_tbl = Table(rows, colWidths=[dw*0.20, dw*0.18, dw*0.62])
         st_tbl.setStyle(TableStyle([
             ("BACKGROUND",    (0, 0), (-1, 0), C_DARK),
@@ -367,12 +380,12 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     story.append(Spacer(1, 0.2*cm))
 
     if fund.get("summary"):
-        story.append(Paragraph(fund["summary"], st["body"]))
+        story.append(Paragraph(_safe(fund["summary"]), st["body"]))
 
     fv = fund.get("fair_value_range") or {}
     if fv.get("low") or fv.get("high"):
         story.append(Paragraph(
-            f"Estimated Fair Value: PKR {fv.get('low', 0):,.0f} – PKR {fv.get('high', 0):,.0f}",
+            _safe(f"Estimated Fair Value: PKR {fv.get('low', 0):,.0f} - PKR {fv.get('high', 0):,.0f}"),
             st["italic"],
         ))
 
@@ -400,13 +413,13 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     story.append(Spacer(1, 0.2*cm))
 
     if sent.get("summary"):
-        story.append(Paragraph(sent["summary"], st["body"]))
+        story.append(Paragraph(_safe(sent["summary"]), st["body"]))
 
     narratives = sent.get("key_narratives", []) or []
     if narratives:
         story.append(Paragraph("Key Sentiment Drivers", st["sub"]))
         for n in narratives[:6]:
-            story.append(Paragraph(f"• {n}", st["bullet"]))
+            story.append(Paragraph(_safe(f"* {n}"), st["bullet"]))
 
     pos_cats = sent.get("catalysts_positive", []) or []
     neg_cats = sent.get("catalysts_negative", []) or []
@@ -419,12 +432,12 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         story.append(Paragraph("Recent News & Announcements", st["sub"]))
         rows = [["Date", "Headline", "Source"]]
         for art in articles[:10]:
-            title  = art.get("title") or art.get("Title") or art.get("headline") or "—"
-            date   = (art.get("published") or art.get("date") or art.get("Date") or "—")[:10]
-            source = art.get("source") or art.get("Source") or art.get("publisher") or "—"
-            rows.append([Paragraph(date, st["tc"]),
-                         Paragraph(title[:120], st["body"]),
-                         Paragraph(source[:30], st["tc"])])
+            title  = art.get("title") or art.get("Title") or art.get("headline") or "-"
+            date   = (art.get("published") or art.get("date") or art.get("Date") or "-")[:10]
+            source = art.get("source") or art.get("Source") or art.get("publisher") or "-"
+            rows.append([Paragraph(_safe(date), st["tc"]),
+                         Paragraph(_safe(str(title)[:120]), st["body"]),
+                         Paragraph(_safe(str(source)[:30]), st["tc"])])
         news_tbl = Table(rows, colWidths=[dw*0.12, dw*0.70, dw*0.18])
         news_tbl.setStyle(TableStyle([
             ("BACKGROUND",    (0, 0), (-1, 0), C_DARK),
@@ -462,7 +475,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     story.append(Spacer(1, 0.2*cm))
 
     if risk.get("summary"):
-        story.append(Paragraph(risk["summary"], st["body"]))
+        story.append(Paragraph(_safe(risk["summary"]), st["body"]))
 
     rfs = risk.get("risk_factors", []) or []
     if rfs:
@@ -470,9 +483,9 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         rf_rows = [["Factor", "Severity", "Detail"]]
         for rf in rfs[:8]:
             rf_rows.append([
-                Paragraph(rf.get("factor", ""), st["body"]),
-                Paragraph(rf.get("severity", "").upper(), st["tc"]),
-                Paragraph(rf.get("detail", ""), st["body"]),
+                Paragraph(_safe(rf.get("factor", "")), st["body"]),
+                Paragraph(_safe(rf.get("severity", "").upper()), st["tc"]),
+                Paragraph(_safe(rf.get("detail", "")), st["body"]),
             ])
         rf_tbl = Table(rf_rows, colWidths=[dw*0.25, dw*0.12, dw*0.63])
         rf_tbl.setStyle(TableStyle([
@@ -501,8 +514,8 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
 
     if bull_thesis or bear_thesis:
         th_tbl = Table(
-            [[Paragraph(f'🐂 "{bull_thesis}"', st["italic"]),
-              Paragraph(f'🐻 "{bear_thesis}"', st["italic"])]],
+            [[Paragraph(_safe(f'BULL: "{bull_thesis}"'), st["italic"]),
+              Paragraph(_safe(f'BEAR: "{bear_thesis}"'), st["italic"])]],
             colWidths=[dw / 2, dw / 2],
         )
         th_tbl.setStyle(TableStyle([
@@ -525,11 +538,11 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
             br = ""
             if i < len(bull_args):
                 a = bull_args[i]
-                bl = f"▲ {a.get('point','')}\n{a.get('evidence','')}"
+                bl = f"+ {a.get('point','')}\n{a.get('evidence','')}"
             if i < len(bear_args):
                 a = bear_args[i]
-                br = f"▼ {a.get('point','')}\n{a.get('evidence','')}"
-            rows.append([Paragraph(bl, st["body"]), Paragraph(br, st["body"])])
+                br = f"- {a.get('point','')}\n{a.get('evidence','')}"
+            rows.append([Paragraph(_safe(bl), st["body"]), Paragraph(_safe(br), st["body"])])
         db_tbl = Table(rows, colWidths=[dw / 2, dw / 2])
         db_tbl.setStyle(TableStyle([
             ("VALIGN",        (0, 0), (-1, -1), "TOP"),
@@ -549,7 +562,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         "It is NOT financial advice. Always consult a qualified financial "
         "advisor before making investment decisions."
     ))
-    story.append(Paragraph(disclaimer, st["disclaimer"]))
+    story.append(Paragraph(_safe(disclaimer), st["disclaimer"]))
 
     doc.build(story)
     return buf.getvalue()
