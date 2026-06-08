@@ -53,7 +53,7 @@ MACRO_DIR             = os.path.join(MARKET_DATA_DIR, "macroeconomics")
 
 REQUEST_TIMEOUT = 30   # seconds — regular API calls
 PDF_TIMEOUT     = 120  # seconds — PDF downloads can be large
-DELAY           = 1    # seconds between every network call
+DELAY           = 3    # seconds between every network call
 
 _session = requests.Session()
 _session.headers.update({
@@ -82,33 +82,54 @@ def setup_dirs():
 
 # ─── Network helpers ──────────────────────────────────────────────────────────
 
+_RETRY_DELAYS = [5, 15, 30]  # seconds to wait before each retry attempt
+
+
 def api_get(path, params=None):
     url = f"{BASE_API_URL}/{path.lstrip('/')}"
-    try:
-        r = _session.get(url, params=params, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.HTTPError as e:
-        print(f"  [-] HTTP error GET {path}: {e}")
-    except requests.exceptions.Timeout:
-        print(f"  [-] Timeout GET {path}")
-    except Exception as e:
-        print(f"  [-] Error GET {path}: {e}")
+    for attempt, backoff in enumerate([0] + _RETRY_DELAYS):
+        if backoff:
+            print(f"  [~] Waiting {backoff}s before retry {attempt}/{len(_RETRY_DELAYS)}...")
+            time.sleep(backoff)
+        try:
+            r = _session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"  [-] HTTP error GET {path}: {e}")
+            return None  # HTTP errors won't improve with retries
+        except requests.exceptions.Timeout:
+            print(f"  [-] Timeout GET {path} (attempt {attempt + 1})")
+        except requests.exceptions.ConnectionError as e:
+            print(f"  [-] Connection error GET {path} (attempt {attempt + 1}): {e}")
+        except Exception as e:
+            print(f"  [-] Error GET {path}: {e}")
+            return None
+    print(f"  [-] Giving up on GET {path} after {len(_RETRY_DELAYS)} retries.")
     return None
 
 
 def api_post(path, payload):
     url = f"{BASE_API_URL}/{path.lstrip('/')}"
-    try:
-        r = _session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.HTTPError as e:
-        print(f"  [-] HTTP error POST {path}: {e}")
-    except requests.exceptions.Timeout:
-        print(f"  [-] Timeout POST {path}")
-    except Exception as e:
-        print(f"  [-] Error POST {path}: {e}")
+    for attempt, backoff in enumerate([0] + _RETRY_DELAYS):
+        if backoff:
+            print(f"  [~] Waiting {backoff}s before retry {attempt}/{len(_RETRY_DELAYS)}...")
+            time.sleep(backoff)
+        try:
+            r = _session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"  [-] HTTP error POST {path}: {e}")
+            return None  # HTTP errors won't improve with retries
+        except requests.exceptions.Timeout:
+            print(f"  [-] Timeout POST {path} (attempt {attempt + 1})")
+        except requests.exceptions.ConnectionError as e:
+            print(f"  [-] Connection error POST {path} (attempt {attempt + 1}): {e}")
+        except Exception as e:
+            print(f"  [-] Error POST {path}: {e}")
+            return None
+    print(f"  [-] Giving up on POST {path} after {len(_RETRY_DELAYS)} retries.")
     return None
 
 
@@ -214,11 +235,30 @@ def _clean_table(raw_table):
     ]
 
 
+def _table_to_markdown(table):
+    """Convert a clean table (list of lists) to a GitHub-flavoured markdown pipe table."""
+    if not table:
+        return ""
+    def esc(cell):
+        return cell.replace("|", "\\|").replace("\n", " ")
+    headers = [esc(c) for c in table[0]]
+    body_rows = []
+    for row in table[1:]:
+        padded = row + [""] * max(0, len(headers) - len(row))
+        body_rows.append("| " + " | ".join(esc(c) for c in padded[:len(headers)]) + " |")
+    return "\n".join([
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+        *body_rows,
+    ])
+
+
 def extract_and_save_pdf(pdf_bytes, title, base_filename):
     """
     Extract all text and tables from a PDF.
-    - Tables    → <base_filename>_tables.xlsx  (one sheet per table)
-    - Full doc  → <base_filename>.docx         (text + tables in reading order)
+    AI-readable  → <base_filename>.md           (markdown: headings + pipe tables)
+    Human review → <base_filename>.docx         (Word: text + tables in reading order)
+                   <base_filename>_tables.xlsx  (one worksheet per extracted table)
     """
     all_pages = []   # list of {"page": n, "text": str, "tables": [clean_table]}
 
@@ -274,7 +314,7 @@ def extract_and_save_pdf(pdf_bytes, title, base_filename):
         except Exception as e:
             print(f"  [-] Failed to save Excel for '{title}': {e}")
 
-    # ── Word: text + tables in reading order ─────────────────────────
+    # ── Word: human-readable version for review and verification ─────
     word_path = os.path.join(EXTRACTED_DIR, base_filename + ".docx")
     try:
         doc = Document()
@@ -313,24 +353,28 @@ def extract_and_save_pdf(pdf_bytes, title, base_filename):
     except Exception as e:
         print(f"  [-] Failed to save Word doc for '{title}': {e}")
 
-    # ── Plain text: best format for AI agent consumption ──────────────
-    txt_path = os.path.join(EXTRACTED_DIR, base_filename + ".txt")
+    # ── Markdown: primary format for AI agent consumption ─────────────
+    md_path = os.path.join(EXTRACTED_DIR, base_filename + ".md")
     try:
-        lines = [f"TITLE: {title}", "=" * 60, ""]
+        lines = [f"# {title}", ""]
         for page_info in all_pages:
-            lines.append(f"--- Page {page_info['page']} ---")
+            lines.append(f"## Page {page_info['page']}")
+            lines.append("")
             if page_info["text"].strip():
                 lines.append(page_info["text"].strip())
+                lines.append("")
             for t_idx, table in enumerate(page_info["tables"], start=1):
                 if not table:
                     continue
-                lines.append(f"\n[Table {t_idx}]")
-                for row in table:
-                    lines.append(" | ".join(row))
+                lines.append(f"### Table {t_idx}")
+                lines.append("")
+                lines.append(_table_to_markdown(table))
+                lines.append("")
+            lines.append("---")
             lines.append("")
-        save_txt("\n".join(lines), txt_path)
+        save_txt("\n".join(lines), md_path)
     except Exception as e:
-        print(f"  [-] Failed to save TXT for '{title}': {e}")
+        print(f"  [-] Failed to save Markdown for '{title}': {e}")
 
 
 # ─── Section 1: General Market Summaries & PDF Catalogs ───────────────────────
@@ -642,7 +686,7 @@ def main():
     fetch_pdf_catalog("morningbriefing",   "morning_briefing_pdfs.xlsx",       max_pdfs=3)
     fetch_pdf_catalog("technicalresearch", "technical_research_pdfs.xlsx",     max_pdfs=3)
     fetch_pdf_catalog("marketroundup",     "market_roundup_pdfs.xlsx",         max_pdfs=3)
-    fetch_pdf_catalog("reports/1000",      "research_reports_catalog.xlsx",    max_pdfs=3)
+    fetch_pdf_catalog("reports/1000",      "research_reports_catalog.xlsx",    max_pdfs=50)
 
     print("\n=== Section 2: Macroeconomic Indicators ===")
     fetch_macro_indicators()

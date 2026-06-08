@@ -341,7 +341,7 @@ def main():
         if quote_raw and isinstance(quote_raw, dict):
             df_quote = pd.DataFrame(list(quote_raw.items()), columns=["Metric", "Value"])
             # Attempt to parse values to numeric where possible to avoid text cells in Excel
-            df_quote["Value"] = pd.to_numeric(df_quote["Value"], errors='ignore')
+            df_quote["Value"] = pd.to_numeric(df_quote["Value"], errors='coerce').fillna(df_quote["Value"])
             # For remaining string values, strip whitespace
             df_quote["Value"] = df_quote["Value"].apply(lambda v: v.strip() if isinstance(v, str) else v)
         else:

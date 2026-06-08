@@ -11,3 +11,16 @@ build/
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+# Firebase service account keys — never commit these
+*-adminsdk-*.json
+firebase-debug.log
+
+# Large data folders — stored locally / in Firestore, not in git
+company_data/
+market_data/
+market_intelligence/
+
+# Scratch and agent working files
+scratch/
+.agents/
