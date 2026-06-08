@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let recentSearches = JSON.parse(localStorage.getItem('psx_recent_searches') || '[]');
     let portfolio = [];
     let currentTheme = 'dark';
+    let currentReport = null;   // stores the full analysis report for PDF download
 
     // ── DOM ELEMENTS ─────────────────────────────────────────────────
     // Theme Toggle
@@ -73,6 +74,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Debate Side-by-side
     const debateBullContent = document.getElementById('debate-bull-content');
     const debateBearContent = document.getElementById('debate-bear-content');
+
+    // Report Download
+    const reportDownloadBar = document.getElementById('report-download-bar');
+    const btnDownloadReport  = document.getElementById('btn-download-report');
+    const btnDownloadText    = document.getElementById('btn-download-report-text');
 
     // Verdict Elements
     const verdictBadge = document.getElementById('verdict-badge');
@@ -942,6 +948,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         debateSection.setAttribute('hidden', '');
         verdictSection.setAttribute('hidden', '');
         errorDisplay.setAttribute('hidden', '');
+        if (reportDownloadBar) reportDownloadBar.setAttribute('hidden', '');
+        currentReport = null;
 
         // Reset step statuses
         [stepTechnical, stepFundamental, stepSentiment, stepRisk, stepDebate, stepRecommendation].forEach(el => {
@@ -957,7 +965,56 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ── RENDER ANALYSIS RESULTS ──────────────────────────────────────
+    // ── PDF REPORT DOWNLOAD ──────────────────────────────────────────
+    if (btnDownloadReport) {
+        btnDownloadReport.addEventListener('click', async () => {
+            if (!currentReport) return;
+            btnDownloadReport.disabled = true;
+            btnDownloadText.textContent = 'Generating PDF...';
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                const user = firebase.auth().currentUser;
+                if (user) {
+                    try {
+                        const token = await user.getIdToken();
+                        headers['Authorization'] = `Bearer ${token}`;
+                    } catch (_) {}
+                }
+
+                const resp = await fetch(`${API_BASE}/api/report/generate`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(currentReport),
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({ error: 'Unknown error' }));
+                    throw new Error(err.error || `HTTP ${resp.status}`);
+                }
+
+                const blob = await resp.blob();
+                const url  = URL.createObjectURL(blob);
+                const a    = document.createElement('a');
+                a.href     = url;
+                a.download = `PSX_Analysis_${currentReport.symbol}_${new Date().toISOString().slice(0,10)}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                btnDownloadText.textContent = 'Download PDF Report';
+            } catch (e) {
+                console.error('PDF download failed:', e);
+                btnDownloadText.textContent = 'Download Failed — Retry';
+            } finally {
+                btnDownloadReport.disabled = false;
+            }
+        });
+    }
+
     function renderAnalysisReport(report) {
+        // Store for PDF download
+        currentReport = report;
+
         // Toggle view flags
         agentStatusBar.setAttribute('hidden', '');
         skeletonGrid.setAttribute('hidden', '');
@@ -965,6 +1022,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         agentsGrid.removeAttribute('hidden');
         debateSection.removeAttribute('hidden');
         verdictSection.removeAttribute('hidden');
+        if (reportDownloadBar) reportDownloadBar.removeAttribute('hidden');
 
         // 1. Render Quote
         renderQuote(report.quote, report.company_name, report.sector);

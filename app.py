@@ -14,8 +14,9 @@ import json
 import traceback
 from datetime import datetime
 
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
+import io
 
 # ── Ensure project root is on path ────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -263,6 +264,37 @@ def remove_holding(symbol: str):
 # ══════════════════════════════════════════════════════════════
 #  ERROR HANDLERS
 # ══════════════════════════════════════════════════════════════
+
+@app.route("/api/report/generate", methods=["POST"])
+def generate_report():
+    """
+    Generate a PDF investment report from a full analysis payload.
+
+    Request body: the complete JSON object returned by /api/analyze.
+    Returns: PDF file download (application/pdf).
+    """
+    try:
+        data = request.get_json(force=True)
+        if not data or not data.get("symbol"):
+            return jsonify({"error": "Report data with symbol is required"}), 400
+
+        from report.pdf_generator import generate_pdf
+        pdf_bytes = generate_pdf(data)
+
+        symbol   = data.get("symbol", "report").upper()
+        filename = f"PSX_Analysis_{symbol}_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
+
+        return send_file(
+            io.BytesIO(pdf_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
+
 
 @app.errorhandler(404)
 def not_found(e):
