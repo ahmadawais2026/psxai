@@ -278,10 +278,59 @@ def generate_report():
         if not data or not data.get("symbol"):
             return jsonify({"error": "Report data with symbol is required"}), 400
 
+        symbol = data.get("symbol", "").upper()
+        sector = data.get("sector", "")
+
+        # Fetch rich financial data from Firestore/yfinance and attach for PDF rendering
+        raw_data: dict = {}
+        try:
+            from data.market_data import get_financial_statements, get_fundamentals
+            from data.local_data import (
+                get_market_context, get_local_company_news,
+                get_research_reports, format_market_context_text,
+            )
+
+            try:
+                raw_data["financial_statements"] = get_financial_statements(symbol)
+            except Exception as _e:
+                app.logger.warning("financial_statements fetch failed: %s", _e)
+                raw_data["financial_statements"] = {}
+
+            try:
+                raw_data["fundamentals"] = get_fundamentals(symbol)
+            except Exception as _e:
+                app.logger.warning("fundamentals fetch failed: %s", _e)
+                raw_data["fundamentals"] = {}
+
+            try:
+                mctx = get_market_context(sector=sector)
+                raw_data["market_context_text"] = format_market_context_text(mctx)
+            except Exception as _e:
+                app.logger.warning("market_context fetch failed: %s", _e)
+                raw_data["market_context_text"] = ""
+
+            try:
+                raw_data["company_news"] = get_local_company_news(symbol)[:20]
+            except Exception as _e:
+                app.logger.warning("company_news fetch failed: %s", _e)
+                raw_data["company_news"] = []
+
+            try:
+                raw_data["research_excerpts"] = [
+                    r[:3000] for r in get_research_reports(symbol, sector=sector, max_reports=4)
+                ]
+            except Exception as _e:
+                app.logger.warning("research_reports fetch failed: %s", _e)
+                raw_data["research_excerpts"] = []
+
+        except Exception as _e:
+            app.logger.warning("raw_data enrichment block failed: %s", _e)
+
+        data["raw_data"] = raw_data
+
         from report.pdf_generator import generate_pdf
         pdf_bytes = generate_pdf(data)
 
-        symbol   = data.get("symbol", "report").upper()
         filename = f"PSX_Analysis_{symbol}_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
 
         return send_file(
