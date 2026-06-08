@@ -619,6 +619,18 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     if fund.get("summary"):
         story.append(Paragraph(_safe(fund["summary"]), st["body"]))
 
+    # Forward thesis (new field from updated prompt)
+    if fund.get("forward_thesis"):
+        story.append(Paragraph("Forward Outlook", st["sub"]))
+        story.append(Paragraph(_safe(fund["forward_thesis"]), st["body"]))
+
+    # Key observed trends
+    key_trends = fund.get("key_trends") or []
+    if key_trends:
+        story.append(Paragraph("Key Financial Trends", st["sub"]))
+        for trend in key_trends[:6]:
+            story.append(Paragraph(_safe(f"* {trend}"), st["bullet"]))
+
     fvr = fund.get("fair_value_range") or {}
     if fvr.get("low") or fvr.get("high"):
         story.append(Paragraph(
