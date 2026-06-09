@@ -53,6 +53,8 @@ DOMAIN_SELECTORS: dict[str, list[str]] = {
                               "div.template-story"],
     "www.thenews.pk":       ["div.siteContent", "article", ".news-detail",
                               "div.article-body"],
+    "e.thenews.pk":         ["div.siteContent", "div.news-detail", "article",
+                              "div.content", "div.story-detail"],
     "mettisglobal.news":    ["article", ".entry-content", ".post-content",
                               "div.td-post-content"],
 }

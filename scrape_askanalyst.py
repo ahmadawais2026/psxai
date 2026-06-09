@@ -6,13 +6,12 @@ import pandas as pd
 # ═══════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ═══════════════════════════════════════════════════════════════════════
-# Batch 7: Next 20 PSX companies (119 already scraped in Batches 1-6)
+# Batch 14: Next 20 PSX companies (259 already scraped in Batches 1-13)
 TICKERS = [
-    # Batch 8: Next 20 unscraped PSX companies (138 already scraped)
-    "AASM", "ADAMS", "AGSML", "AHTM", "AIRLINK",
-    "ARMG", "AWTX", "BAFS", "BAPL", "BBFL",
-    "BCML", "BFAGRO", "BFBIO", "BML", "CFL",
-    "CHBL", "CJPL", "CPHL", "CRTM", "CSIL",
+    "NONS", "NRSL", "OBOY", "OCTOPUS", "OLPL",
+    "OTSU", "PABC", "PACE", "PAKD", "PAKOXY",
+    "PAKRI", "PCAL", "PECO", "PGLC", "PHDL",
+    "PIAHCLA", "PIBTL", "PICT", "PIL", "PINL",
 ]
 BASE_API_URL = "https://api.askanalyst.com.pk/api"
 PERIOD = "quarter"  # "annual" or "quarter"

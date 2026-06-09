@@ -36,6 +36,15 @@ import pandas as pd
 import pdfplumber
 import requests
 from docx import Document
+from bs4 import BeautifulSoup
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Zakheera Credentials
+ZAKHEERA_USER = "hello@finqalab.com"
+ZAKHEERA_PASS = "kDv7y1#w"
+
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -483,19 +492,137 @@ def fetch_pdf_catalog(endpoint, out_filename, max_pdfs=100):
 
 # ─── Section 2: Macroeconomic Indicators Index ────────────────────────────────
 
+
 def fetch_macro_indicators():
-    print("[*] Macroeconomic Indicators Index (/searchlist)...")
-    data = api_get("/searchlist")
-    time.sleep(DELAY)
-    if data is None:
-        print("  [-] Skipped.")
-        return
-    df = flatten_to_df(data)
-    if df is None or df.empty:
-        print("  [-] Skipped: could not parse response.")
-        return
-    save_excel(df, os.path.join(MACRO_DIR, "macro_indicators_index.xlsx"),
-               sheet_name="Indicators")
+    print("[*] Fetching macroeconomic indicators from Zakheera...")
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    session = requests.Session()
+    session.verify = False
+    
+    try:
+        # Step 1: Authenticate to Zakheera
+        print("  [~] Logging in to Zakheera.com...")
+        r = session.get('https://www.zakheera.com/user/login', headers=headers, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        
+        soup = BeautifulSoup(r.text, 'html.parser')
+        form = soup.find('form')
+        if not form:
+            print("  [-] Error: Could not find login form on Zakheera.")
+            return
+            
+        form_build_id = next(
+            inp.get('value') for inp in form.find_all('input') if inp.get('name') == 'form_build_id'
+        )
+        
+        payload = {
+            'name': ZAKHEERA_USER,
+            'pass': ZAKHEERA_PASS,
+            'form_build_id': form_build_id,
+            'form_id': 'user_login',
+            'op': 'Log in'
+        }
+        
+        login_res = session.post('https://www.zakheera.com/user/login', data=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        login_res.raise_for_status()
+        print("  [OK] Logged in successfully.")
+        time.sleep(DELAY)
+        
+        # Step 2: Helper for table parsing
+        def parse_table_helper(table):
+            rows = table.find_all('tr')
+            data = []
+            headers_list = []
+            for tr in rows:
+                cells = tr.find_all(['td', 'th'], recursive=False)
+                if not cells:
+                    continue
+                vals = [c.get_text().strip() for c in cells]
+                
+                if not headers_list:
+                    headers_list = vals
+                    if headers_list and headers_list[0] == '':
+                        headers_list[0] = 'Tenor'
+                else:
+                    data.append(vals)
+            
+            if data:
+                num_cols = len(headers_list)
+                clean_data = []
+                for r in data:
+                    if len(r) < num_cols:
+                        r = r + [''] * (num_cols - len(r))
+                    elif len(r) > num_cols:
+                        r = r[:num_cols]
+                    clean_data.append(r)
+                return pd.DataFrame(clean_data, columns=headers_list)
+            return pd.DataFrame(columns=headers_list)
+
+        # Step 3: Fetch Economy Dashboard (Node 203)
+        print("  [~] Fetching Economy Dashboard (node/203)...")
+        r_eco = session.get('https://www.zakheera.com/node/203', headers=headers, timeout=REQUEST_TIMEOUT)
+        r_eco.raise_for_status()
+        soup_eco = BeautifulSoup(r_eco.text, 'html.parser')
+        tables_eco = soup_eco.find_all('table')
+        
+        df_cpi_yy = pd.DataFrame()
+        df_cpi_mm = pd.DataFrame()
+        df_m2 = pd.DataFrame()
+        
+        if len(tables_eco) > 0:
+            df_cpi_yy = parse_table_helper(tables_eco[0])
+            print(f"  [OK] Extracted CPI Y/Y ({len(df_cpi_yy)} rows).")
+        if len(tables_eco) > 1:
+            df_cpi_mm = parse_table_helper(tables_eco[1])
+            print(f"  [OK] Extracted CPI M/M ({len(df_cpi_mm)} rows).")
+        if len(tables_eco) > 3:
+            df_m2 = parse_table_helper(tables_eco[3])
+            print(f"  [OK] Extracted Money Supply M2 ({len(df_m2)} rows).")
+            
+        time.sleep(DELAY)
+        
+        # Step 4: Fetch Interest Rates Dashboard (Node 202)
+        print("  [~] Fetching Interest Rates Dashboard (node/202)...")
+        r_ir = session.get('https://www.zakheera.com/node/202', headers=headers, timeout=REQUEST_TIMEOUT)
+        r_ir.raise_for_status()
+        soup_ir = BeautifulSoup(r_ir.text, 'html.parser')
+        tables_ir = soup_ir.find_all('table')
+        
+        df_policy_rates = pd.DataFrame()
+        df_kibor = pd.DataFrame()
+        
+        if len(tables_ir) > 0:
+            df_policy_rates = parse_table_helper(tables_ir[0])
+            print(f"  [OK] Extracted Policy Rates ({len(df_policy_rates)} rows).")
+        if len(tables_ir) > 2:
+            df_kibor = parse_table_helper(tables_ir[2])
+            print(f"  [OK] Extracted KIBOR Curve ({len(df_kibor)} rows).")
+            
+        # Step 5: Save all tables to Excel
+        out_path = os.path.join(MACRO_DIR, "macroeconomics_zakheera.xlsx")
+        with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+            if not df_cpi_yy.empty:
+                df_cpi_yy.to_excel(writer, sheet_name="CPI_YY", index=False)
+            if not df_cpi_mm.empty:
+                df_cpi_mm.to_excel(writer, sheet_name="CPI_MM", index=False)
+            if not df_m2.empty:
+                df_m2.to_excel(writer, sheet_name="Money_Supply_M2", index=False)
+            if not df_policy_rates.empty:
+                df_policy_rates.to_excel(writer, sheet_name="Policy_Rates", index=False)
+            if not df_kibor.empty:
+                df_kibor.to_excel(writer, sheet_name="KIBOR_Curve", index=False)
+                
+        print(f"  [OK] Saved all macro tables to {out_path}")
+        
+    except Exception as e:
+        print(f"  [-] Failed to fetch or parse macroeconomic indicators: {e}")
+
+
+
 
 
 # ─── Section 3: Sector-Specific Fundamentals ──────────────────────────────────
