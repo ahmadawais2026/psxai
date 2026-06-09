@@ -24,3 +24,7 @@ market_intelligence/
 # Scratch and agent working files
 scratch/
 .agents/
+
+# Personal-use scripts — not for GitHub
+scrape_zakheera_financials.py
+beautiful_financials/
