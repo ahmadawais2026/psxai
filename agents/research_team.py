@@ -18,6 +18,8 @@ from agents.prompts import (
     DEBATE_PROMPT_TEMPLATE,
     DEBATE_ROUND_OPPONENT_SECTION,
     DEBATE_ROUND_INSTRUCTION,
+    DEBATE_SYNTHESIZER_PERSONA,
+    DEBATE_SYNTHESIS_TEMPLATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ class ResearchTeam:
     def __init__(self) -> None:
         self.bull = BaseAgent("Bull Researcher", BULL_RESEARCHER_PERSONA)
         self.bear = BaseAgent("Bear Researcher", BEAR_RESEARCHER_PERSONA)
+        self.synthesizer = BaseAgent("Debate Synthesizer", DEBATE_SYNTHESIZER_PERSONA)
 
     def debate(self, analyst_reports: Dict[str, Any], rounds: int = 2) -> Dict[str, Any]:
         """
@@ -102,11 +105,33 @@ class ResearchTeam:
             debate_log.append({"round": r, "agent": "Bear Researcher", "output": latest_bear})
             
         # ── Step 3: Synthesize Agreements and Disagreements ──────
-        # We can extract agreements and disagreements conceptually or ask Gemini to summarize them,
-        # but to keep it fast and deterministic, let's extract them directly from the debate outputs
-        # or synthesize a brief list using standard key parameters.
-        agreements = self._extract_agreements(latest_bull, latest_bear)
-        disagreements = self._extract_disagreements(latest_bull, latest_bear)
+        logger.info("Synthesizing debate agreements and disagreements using Debate Synthesizer...")
+        synthesis_prompt = DEBATE_SYNTHESIS_TEMPLATE.format(
+            bull_report=json.dumps(latest_bull, indent=2),
+            bear_report=json.dumps(latest_bear, indent=2)
+        )
+        synthesis_result = self.synthesizer.query_json(synthesis_prompt)
+        
+        agreements = synthesis_result.get("agreements", [])
+        disagreements = synthesis_result.get("disagreements", [])
+        
+        # Ensure agreements and disagreements are lists of strings
+        if not isinstance(agreements, list):
+            agreements = [str(agreements)] if agreements else []
+        if not isinstance(disagreements, list):
+            disagreements = [str(disagreements)] if disagreements else []
+            
+        # Enforce accuracy of quantitative data layer agreement (grounded consensus on data)
+        has_data_agreement = any("data layer" in a.lower() or "quantitative" in a.lower() for a in agreements)
+        if not has_data_agreement:
+            agreements.insert(0, "Both agents agree on the accuracy of the underlying quantitative data layer (price, volume, debt, PE ratios).")
+            
+        # Calculate and prepend deterministic conviction-gap message
+        bull_conv = latest_bull.get("conviction", 5)
+        bear_conv = latest_bear.get("conviction", 5)
+        conviction_gap = abs(bull_conv - bear_conv)
+        conviction_msg = f"Conviction gap: Bull conviction is {bull_conv}/10 vs Bear conviction of {bear_conv}/10 (gap of {conviction_gap}/10)."
+        disagreements.insert(0, conviction_msg)
         
         logger.info("Debate committee finished deliberation.")
         return {
@@ -118,51 +143,3 @@ class ResearchTeam:
             "disagreements": disagreements,
             "debate_log": debate_log
         }
-        
-    def _extract_agreements(self, bull_report: Dict[str, Any], bear_report: Dict[str, Any]) -> List[str]:
-        """Extract points where both researchers acknowledge common factors (e.g. catalysts, metrics)."""
-        # Heuristically compile agreements from the debate context
-        # Bull risk rebuttals and Bear arguments often overlap on macro risk factors
-        agreements = []
-        
-        # If there are explicit agreements noted in prompts, we could grab them,
-        # but let's synthesize generic structural points based on reports:
-        # e.g., both acknowledge the current stock price levels and quantitative metrics.
-        agreements.append("Both agents agree on the accuracy of the underlying quantitative data layer (price, volume, debt, PE ratios).")
-        
-        # Look for matching keywords in catalysts/risks
-        bull_catalysts = set(c.lower() for c in bull_report.get("catalysts", []))
-        bear_red_flags = set(rf.lower() for rf in bear_report.get("red_flags", []))
-        
-        for catalyst in bull_report.get("catalysts", []):
-            for flag in bear_report.get("red_flags", []):
-                if catalyst.lower()[:15] in flag.lower() or flag.lower()[:15] in catalyst.lower():
-                    agreements.append(f"Acknowledge key risk/catalyst factor: {catalyst}")
-                    
-        if len(agreements) == 1:
-            agreements.append("Agree that structural industry headwinds and regulatory changes represent active risk factors.")
-            
-        return agreements
-        
-    def _extract_disagreements(self, bull_report: Dict[str, Any], bear_report: Dict[str, Any]) -> List[str]:
-        """Extract key points of divergence between the Bull and Bear cases."""
-        disagreements = []
-        
-        # Summarize the core conflict
-        disagreements.append(
-            f"Divergence in outlook: Bull thesis is '{bull_report.get('thesis', '')}' "
-            f"whereas Bear thesis is '{bear_report.get('thesis', '')}'."
-        )
-        
-        # Compare convictions
-        bull_conv = bull_report.get("conviction", 5)
-        bear_conv = bear_report.get("conviction", 5)
-        disagreements.append(f"Conviction gap: Bull conviction is {bull_conv}/10 vs Bear conviction of {bear_conv}/10.")
-        
-        # Valuation/Upside vs Downside disagreement
-        disagreements.append(
-            f"Price target/outcome disparity: Bull upside case is '{bull_report.get('price_upside_case', 'N/A')}' "
-            f"while Bear downside case is '{bear_report.get('price_downside_case', 'N/A')}'."
-        )
-        
-        return disagreements

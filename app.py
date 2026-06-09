@@ -43,6 +43,34 @@ app = Flask(__name__, static_url_path="", static_folder="static")
 CORS(app)
 
 
+from flask.json.provider import DefaultJSONProvider
+import math
+
+class SafeJSONProvider(DefaultJSONProvider):
+    def dumps(self, obj, **kwargs):
+        def sanitize(o):
+            if isinstance(o, dict):
+                return {k: sanitize(v) for k, v in o.items()}
+            elif isinstance(o, list):
+                return [sanitize(x) for x in o]
+            elif isinstance(o, tuple):
+                return tuple(sanitize(x) for x in o)
+            tname = type(o).__name__
+            if isinstance(o, float) or 'float' in tname or tname == 'floating':
+                try:
+                    fval = float(o)
+                    if math.isnan(fval) or math.isinf(fval):
+                        return None
+                    return fval
+                except (ValueError, TypeError):
+                    pass
+            return o
+        return super().dumps(sanitize(obj), **kwargs)
+
+app.json = SafeJSONProvider(app)
+
+
+
 def _get_authenticated_uid(req):
     """Verify Authorization Bearer token from header and return user uid."""
     auth_header = req.headers.get("Authorization")
