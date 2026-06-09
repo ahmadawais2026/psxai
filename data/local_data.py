@@ -316,7 +316,7 @@ def get_local_company_news(ticker: str) -> List[Dict[str, Any]]:
     if isinstance(data, list):
         for item in data:
             title = str(item.get("title", "") or item.get("Title", "")).upper()
-            body = str(item.get("description", "") or item.get("body", "")).upper()
+            body  = str(item.get("content") or item.get("description", "") or item.get("body", "")).upper()
             if ticker_upper in title or ticker_upper in body:
                 results.append(item)
 
@@ -394,13 +394,17 @@ def format_market_context_text(ctx: Dict[str, Any]) -> str:
                 trend_str = "  →  ".join(f"{p.get('year','?')}: {p.get('value',0):,.0f}" for p in recent)
                 lines.append(f"  {series_name} ({label}): {trend_str}")
 
-    # General market news (top 5 headlines)
+    # General market news (top 5 with body text when available)
     news = ctx.get("market_news", [])
     if news:
         lines.append("\n── LATEST PSX MARKET NEWS ──")
         for item in news[:5]:
-            title = item.get("title") or item.get("Title") or ""
-            date = item.get("date") or item.get("Date") or item.get("published") or ""
+            title  = item.get("title") or item.get("Title") or ""
+            date   = item.get("date") or item.get("Date") or item.get("published") or ""
+            body   = item.get("content") or item.get("description") or ""
             lines.append(f"  [{date}] {title}")
+            if body:
+                # Truncate to ~400 chars for prompt efficiency
+                lines.append(f"    {body[:400].strip()}")
 
     return "\n".join(lines)
