@@ -795,14 +795,14 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
             title_  = art.get("title")       or art.get("Title")    or art.get("headline") or "-"
             date_   = str(art.get("date")    or art.get("Date")     or art.get("published") or "")[:10]
             source  = art.get("source")      or art.get("Source")   or art.get("publisher") or ""
-            body_   = art.get("description") or art.get("body")     or art.get("content")   or art.get("snippet") or ""
+            body_   = art.get("content") or art.get("description") or art.get("body") or art.get("snippet") or ""
 
             hdr_txt = f"[{date_}]  {str(title_)[:100]}"
             if source:
                 hdr_txt += f"  --  {str(source)[:40]}"
             story.append(Paragraph(_safe(hdr_txt), st["news_title"]))
             if body_ and len(str(body_).strip()) > 20:
-                story.append(Paragraph(_safe(str(body_)[:350]), st["news_body"]))
+                story.append(Paragraph(_safe(str(body_)[:700]), st["news_body"]))
     else:
         story.append(Paragraph(
             "No recent news articles were retrieved for this ticker. "

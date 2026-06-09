@@ -97,11 +97,14 @@ class SentimentAnalystAgent(BaseAgent):
                 title = art.get("title") or art.get("Title") or art.get("headline") or "N/A"
                 published = art.get("published") or art.get("date") or art.get("Date") or "N/A"
                 source = art.get("source") or art.get("Source") or art.get("publisher") or "Unknown"
+                body = art.get("content") or art.get("description") or art.get("body") or ""
                 lines.extend([
                     f"  [{idx}] {title}",
                     f"       Date: {published} | Source: {source}",
-                    ""
                 ])
+                if body and len(str(body).strip()) > 30:
+                    lines.append(f"       {str(body).strip()[:600]}")
+                lines.append("")
 
         if research_reports:
             lines.append("── BROKER RESEARCH REPORTS ──")
