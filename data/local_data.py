@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -131,14 +130,15 @@ def get_market_context(sector: Optional[str] = None) -> Dict[str, Any]:
     """
     context: Dict[str, Any] = {}
 
-    # 1. Macro indicators (last 12 data rows)
-    macro_path = MARKET_DATA_DIR / "macroeconomics" / "macro_indicators_index.xlsx"
+    # 1. Macro snapshot (from fetch_macro_data.py output)
+    macro_path = MARKET_DATA_DIR / "macroeconomics" / "macro_data.json"
     if macro_path.exists():
         try:
-            df = pd.read_excel(macro_path)
-            context["macro"] = df.tail(12).fillna("").to_dict(orient="records")
+            import json
+            with open(macro_path, encoding="utf-8") as _f:
+                context["macro"] = json.load(_f)
         except Exception as e:
-            logger.warning("Macro indicators read failed: %s", e)
+            logger.warning("Macro data read failed: %s", e)
 
     # 2. Latest general PSX news (top 20 items)
     news_path = MARKET_DATA_DIR / "news" / "latest_news.json"
@@ -339,34 +339,60 @@ def format_market_context_text(ctx: Dict[str, Any]) -> str:
     """
     lines: List[str] = []
 
-    # Morning briefing
+    # Morning briefing — headlines only (market data already in macro snapshot)
     briefing = ctx.get("morning_briefing")
-    if briefing:
-        if isinstance(briefing, dict):
-            lines.append("── MORNING MARKET BRIEFING ──")
-            for k, v in list(briefing.items())[:10]:
-                lines.append(f"  {k}: {v}")
-        elif isinstance(briefing, str):
-            lines.append("── MORNING MARKET BRIEFING ──")
-            lines.append(briefing[:800])
+    if isinstance(briefing, dict):
+        headlines = briefing.get("top_headlines", [])
+        if headlines:
+            lines.append(f"── MORNING BRIEFING HEADLINES ({briefing.get('date','')}) ──")
+            for h in headlines[:6]:
+                lines.append(f"  • {h}")
+    elif isinstance(briefing, str) and briefing:
+        lines.append("── MORNING MARKET BRIEFING ──")
+        lines.append(briefing[:500])
 
-    # Macro indicators (latest row only for brevity)
+    # Macro snapshot
     macro = ctx.get("macro")
-    if macro and isinstance(macro, list) and macro:
-        lines.append("\n── MACRO INDICATORS (latest) ──")
-        latest = macro[-1]
-        for k, v in list(latest.items())[:15]:
-            if v not in ("", None):
-                lines.append(f"  {k}: {v}")
+    if macro and isinstance(macro, dict):
+        lines.append("\n── PAKISTAN MACRO SNAPSHOT ──")
+        def _mf(k, label, fmt=None):
+            v = macro.get(k)
+            if v is not None:
+                lines.append(f"  {label}: {fmt(v) if fmt else v}")
+        _mf("as_of",                  "As of")
+        _mf("sbp_policy_rate_pct",    "SBP Policy Rate",       lambda v: f"{v}%  ({macro.get('sbp_decision','')} on {macro.get('sbp_decision_date','')})")
+        _mf("cpi_yoy_pct",            "CPI Inflation (YoY)",   lambda v: f"{v}%  [{macro.get('inflation_trend','')}] (report: {macro.get('cpi_report_date','')})")
+        _mf("real_interest_rate_pct", "Real Interest Rate",    lambda v: f"{v}%")
+        _mf("kse100_last",            "KSE-100",               lambda v: f"{v:,.0f}  {macro.get('kse100_chg_pct','')} day | FYTD {macro.get('kse100_fytd_pct','')} | CYTD {macro.get('kse100_cytd_pct','')}")
+        _mf("pkr_per_usd",            "PKR / USD",             lambda v: f"{v:.2f}")
+        _mf("brent_usd_bbl",          "Brent Crude",           lambda v: f"USD {v:.2f}/bbl")
+        _mf("wti_usd_bbl",            "WTI Crude",             lambda v: f"USD {v:.2f}/bbl")
+        # FIPI/LIPI
+        fipi = macro.get("lipi_fipi", {})
+        if fipi:
+            foreign = fipi.get("Foreign", {})
+            lines.append(f"  FIPI (Foreign): daily {foreign.get('daily_usd_mn','?')} USD mn | CYTD {foreign.get('cytd_usd_mn','?')} USD mn")
 
-    # Sector data (last 3 months per series)
+    # Sector data — extract Total rows and format as compact trend tables
     sector_data = ctx.get("sector_data", {})
     if sector_data:
         lines.append("\n── SECTOR DATA (recent months) ──")
         for series_name, rows in sector_data.items():
-            lines.append(f"  {series_name}:")
-            for row in (rows[-3:] if isinstance(rows, list) else []):
-                lines.append(f"    {row}")
+            if not isinstance(rows, list):
+                continue
+            # Find the Total/aggregate row; fall back to last row
+            total_row = next(
+                (r for r in rows if str(r.get("value", "")).lower() in ("total", "all", "aggregate")),
+                rows[-1] if rows else None,
+            )
+            if not total_row:
+                continue
+            label = total_row.get("value") or total_row.get("label") or series_name
+            data_pts = total_row.get("data", [])
+            if isinstance(data_pts, list) and data_pts:
+                recent = data_pts[-4:]  # last 4 months
+                trend_str = "  →  ".join(f"{p.get('year','?')}: {p.get('value',0):,.0f}" for p in recent)
+                lines.append(f"  {series_name} ({label}): {trend_str}")
 
     # General market news (top 5 headlines)
     news = ctx.get("market_news", [])
