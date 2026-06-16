@@ -98,6 +98,16 @@ def compute_all_indicators(df: pd.DataFrame) -> Dict[str, Any]:
         # ── ATR ──────────────────────────────────────────────────────
         result["atr"] = _compute_atr(high, low, close)
 
+        # ── SOTA Indicators for KSE-100 ─────────────────────────────
+        result["kama"] = _compute_kama(close)
+        result["cmf"] = _compute_cmf(high, low, close, volume)
+        result["adx"] = _compute_adx(high, low, close)
+        result["ichimoku"] = _compute_ichimoku(high, low)
+        result["stochastic"] = _compute_stochastic(high, low, close)
+        result["williams_r"] = _compute_williams_r(high, low, close)
+        result["disparity_index"] = _compute_disparity_index(close)
+        result["vwma"] = _compute_vwma(close, volume)
+
         return result
 
     except Exception as exc:
@@ -576,3 +586,206 @@ def _safe_float(val: Any) -> Optional[float]:
         return float(val)
     except (ValueError, TypeError):
         return None
+
+
+# ── SOTA Indicator Helpers ───────────────────────────────────────────
+
+def _compute_kama(close: pd.Series, window: int = 10) -> Dict[str, Any]:
+    """Compute Kaufman's Adaptive Moving Average (KAMA)."""
+    try:
+        kama_ind = ta.momentum.KAMAIndicator(close=close, window=window)
+        kama_val = _latest(kama_ind.kama())
+        # Calculate Efficiency Ratio (ER)
+        # ER = Change / Volatility
+        change = (close - close.shift(window)).abs()
+        volatility = close.diff().abs().rolling(window=window).sum()
+        er = change / volatility
+        er_val = _latest(er)
+        
+        interpretation = "Chop/Low Liquidity" if er_val is not None and er_val < 0.3 else "Trending/High Conviction"
+        return {
+            "value": round(kama_val, 2) if kama_val is not None else None,
+            "efficiency_ratio": round(er_val, 3) if er_val is not None else None,
+            "interpretation": interpretation
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _compute_cmf(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, window: int = 21) -> Dict[str, Any]:
+    """Compute Chaikin Money Flow (CMF)."""
+    try:
+        cmf_ind = ta.volume.ChaikinMoneyFlowIndicator(high=high, low=low, close=close, volume=volume, window=window)
+        cmf_val = _latest(cmf_ind.chaikin_money_flow())
+        if cmf_val is None:
+            return {"value": None, "interpretation": "Insufficient data"}
+            
+        if cmf_val > 0.05:
+            interp = "Accumulation — institutional buying pressure"
+        elif cmf_val < -0.05:
+            interp = "Distribution — institutional selling pressure"
+        else:
+            interp = "Neutral — balanced capital flows"
+        return {
+            "value": round(cmf_val, 4),
+            "interpretation": interp
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _compute_adx(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> Dict[str, Any]:
+    """Compute Average Directional Index (ADX) to determine trend strength."""
+    try:
+        adx_ind = ta.trend.ADXIndicator(high=high, low=low, close=close, window=window)
+        adx_val = _latest(adx_ind.adx())
+        plus_di = _latest(adx_ind.adx_pos())
+        minus_di = _latest(adx_ind.adx_neg())
+        
+        if adx_val is None:
+            return {"value": None, "interpretation": "Insufficient data"}
+            
+        if adx_val >= 25:
+            interp = "Strong trend"
+        elif adx_val <= 20:
+            interp = "Chop/Range-bound market"
+        else:
+            interp = "Moderate trend strength"
+            
+        bias = "Bullish bias (+DI > -DI)" if plus_di is not None and minus_di is not None and plus_di > minus_di else "Bearish bias (-DI > +DI)"
+        
+        return {
+            "value": round(adx_val, 2),
+            "plus_di": round(plus_di, 2) if plus_di is not None else None,
+            "minus_di": round(minus_di, 2) if minus_di is not None else None,
+            "interpretation": f"{interp} ({bias})"
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _compute_ichimoku(high: pd.Series, low: pd.Series, n1: int = 9, n2: int = 26, n3: int = 52) -> Dict[str, Any]:
+    """Compute Ichimoku Kinko Hyo components."""
+    try:
+        ichimoku = ta.trend.IchimokuIndicator(high=high, low=low, window1=n1, window2=n2, window3=n3)
+        tenkan = _latest(ichimoku.ichimoku_conversion_line())
+        kijun = _latest(ichimoku.ichimoku_base_line())
+        span_a = _latest(ichimoku.ichimoku_a())
+        span_b = _latest(ichimoku.ichimoku_b())
+        
+        if tenkan is None or kijun is None or span_a is None or span_b is None:
+            return {"interpretation": "Insufficient data"}
+            
+        thickness = round(abs(span_a - span_b), 2)
+        cloud_bias = "Bullish Cloud (Span A > Span B)" if span_a > span_b else "Bearish Cloud (Span B > Span A)"
+        
+        return {
+            "tenkan_sen": round(tenkan, 2),
+            "kijun_sen": round(kijun, 2),
+            "senkou_span_a": round(span_a, 2),
+            "senkou_span_b": round(span_b, 2),
+            "cloud_thickness": thickness,
+            "interpretation": f"{cloud_bias} | Thickness: {thickness}"
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _compute_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14, smooth_window: int = 3) -> Dict[str, Any]:
+    """Compute Stochastic Oscillator %K and %D."""
+    try:
+        stoch = ta.momentum.StochasticOscillator(high=high, low=low, close=close, window=window, smooth_window=smooth_window)
+        k_val = _latest(stoch.stoch())
+        d_val = _latest(stoch.stoch_signal())
+        
+        if k_val is None or d_val is None:
+            return {"k": None, "d": None, "interpretation": "Insufficient data"}
+            
+        if k_val >= 80:
+            interp = "Overbought — watching for bearish crossover/exhaustion"
+        elif k_val <= 20:
+            interp = "Oversold — watching for bullish crossover/reversal"
+        else:
+            interp = "Neutral momentum"
+            
+        return {
+            "k": round(k_val, 2),
+            "d": round(d_val, 2),
+            "interpretation": interp
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _compute_williams_r(high: pd.Series, low: pd.Series, close: pd.Series, lookback: int = 14) -> Dict[str, Any]:
+    """Compute Williams %R inverted momentum oscillator."""
+    try:
+        williams = ta.momentum.WilliamsRIndicator(high=high, low=low, close=close, lbp=lookback)
+        w_val = _latest(williams.williams_r())
+        
+        if w_val is None:
+            return {"value": None, "interpretation": "Insufficient data"}
+            
+        if w_val >= -20:
+            interp = "Extreme Overbought — distribution phase"
+        elif w_val <= -80:
+            interp = "Extreme Oversold — potential capitulation/bottom"
+        else:
+            interp = "Neutral momentum"
+            
+        return {
+            "value": round(w_val, 2),
+            "interpretation": interp
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _compute_disparity_index(close: pd.Series) -> Dict[str, Any]:
+    """Compute 5-period and 14-period Disparity Index."""
+    try:
+        ma_5 = close.rolling(window=5).mean()
+        di_5 = ((close - ma_5) / ma_5) * 100
+        di_5_val = _latest(di_5)
+        
+        ma_14 = close.rolling(window=14).mean()
+        di_14 = ((close - ma_14) / ma_14) * 100
+        di_14_val = _latest(di_14)
+        
+        if di_5_val is None or di_14_val is None:
+            return {"di_5": None, "di_14": None, "interpretation": "Insufficient data"}
+            
+        if di_5_val >= 5.0 or di_5_val <= -5.0:
+            interp = f"DI_5 is overextended ({di_5_val:+.2f}%). Imminent mean-reversion risk."
+        else:
+            interp = f"DI_5 is neutral ({di_5_val:+.2f}%). Stable momentum."
+            
+        return {
+            "di_5": round(di_5_val, 2),
+            "di_14": round(di_14_val, 2),
+            "interpretation": interp
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _compute_vwma(close: pd.Series, volume: pd.Series, window: int = 20) -> Dict[str, Any]:
+    """Compute Volume Weighted Moving Average (VWMA)."""
+    try:
+        pv = close * volume
+        sum_pv = pv.rolling(window=window).sum()
+        sum_vol = volume.rolling(window=window).sum()
+        vwma = sum_pv / sum_vol
+        vwma_val = _latest(vwma)
+        current_close = float(close.iloc[-1])
+        
+        if vwma_val is None:
+            return {"value": None, "interpretation": "Insufficient data"}
+            
+        bias = "Above VWMA (Bullish accumulation)" if current_close > vwma_val else "Below VWMA (Bearish distribution)"
+        return {
+            "value": round(vwma_val, 2),
+            "interpretation": f"Price is {bias} relative to PKR {vwma_val:.2f}"
+        }
+    except Exception as e:
+        return {"error": str(e)}
