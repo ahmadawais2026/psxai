@@ -55,6 +55,7 @@ class ResearchTeam:
         Returns:
             Dict: {bull_thesis, bear_thesis, agreements, disagreements, debate_log}
         """
+        import math
         logger.info("Initiating Bull vs Bear Research Debate committee...")
         
         # Serialize analyst reports for context inclusion
@@ -87,70 +88,139 @@ class ResearchTeam:
         latest_bull = bull_round_1
         latest_bear = bear_round_1
         
+        is_reversed = False
+        
         # ── Round 2+: Disagree-or-Commit Deliberation ─────────────
         for r in range(2, rounds + 1):
             logger.info(f"Debate Round {r}: Applying Disagree-or-Commit protocol...")
             
-            # Bull responds to Bear
-            opponent_section = DEBATE_ROUND_OPPONENT_SECTION.format(
-                opponent_argument=json.dumps(latest_bear, indent=2)
-            )
-            bull_prompt = DEBATE_PROMPT_TEMPLATE.format(
-                analyst_reports=reports_context,
-                opponent_section=opponent_section,
-                opponent_instruction=DEBATE_ROUND_INSTRUCTION
-            )
-            latest_bull = self.bull.query_json(bull_prompt)
-            debate_log.append({"round": r, "agent": "Bull Researcher", "output": latest_bull})
+            # Final round: Role-Reversal
+            if r == rounds and rounds >= 2:
+                logger.info(f"Debate Round {r}: Enforcing Role-Reversal...")
+                is_reversed = True
+                
+                # Swap personas
+                bull_persona_temp = self.bull.system_prompt
+                self.bull.system_prompt = self.bear.system_prompt
+                self.bear.system_prompt = bull_persona_temp
+                
+                # Bull (acting as Bear) responds to Bear (who was acting as Bear)
+                opponent_section = DEBATE_ROUND_OPPONENT_SECTION.format(
+                    opponent_argument=json.dumps(latest_bear, indent=2)
+                )
+                bull_prompt = DEBATE_PROMPT_TEMPLATE.format(
+                    analyst_reports=reports_context,
+                    opponent_section=opponent_section,
+                    opponent_instruction=DEBATE_ROUND_INSTRUCTION
+                )
+                latest_bull = self.bull.query_json(bull_prompt)
+                debate_log.append({"round": r, "agent": "Bull Researcher (Role-Reversed)", "output": latest_bull})
+                
+                # Bear (acting as Bull) responds to Bull (who was acting as Bull)
+                # Wait, if Bull acted as Bear, should Bear act against the original Bull? Yes.
+                opponent_section = DEBATE_ROUND_OPPONENT_SECTION.format(
+                    opponent_argument=json.dumps(bull_round_1 if r == 2 else debate_log[-3]['output'], indent=2)
+                )
+                bear_prompt = DEBATE_PROMPT_TEMPLATE.format(
+                    analyst_reports=reports_context,
+                    opponent_section=opponent_section,
+                    opponent_instruction=DEBATE_ROUND_INSTRUCTION
+                )
+                latest_bear = self.bear.query_json(bear_prompt)
+                debate_log.append({"round": r, "agent": "Bear Researcher (Role-Reversed)", "output": latest_bear})
+                
+                # Revert personas (optional, but good practice)
+                self.bear.system_prompt = self.bull.system_prompt
+                self.bull.system_prompt = bull_persona_temp
+                
+            else:
+                # Bull responds to Bear
+                opponent_section = DEBATE_ROUND_OPPONENT_SECTION.format(
+                    opponent_argument=json.dumps(latest_bear, indent=2)
+                )
+                bull_prompt = DEBATE_PROMPT_TEMPLATE.format(
+                    analyst_reports=reports_context,
+                    opponent_section=opponent_section,
+                    opponent_instruction=DEBATE_ROUND_INSTRUCTION
+                )
+                latest_bull = self.bull.query_json(bull_prompt)
+                debate_log.append({"round": r, "agent": "Bull Researcher", "output": latest_bull})
+                
+                # Bear responds to Bull
+                opponent_section = DEBATE_ROUND_OPPONENT_SECTION.format(
+                    opponent_argument=json.dumps(latest_bull, indent=2)
+                )
+                bear_prompt = DEBATE_PROMPT_TEMPLATE.format(
+                    analyst_reports=reports_context,
+                    opponent_section=opponent_section,
+                    opponent_instruction=DEBATE_ROUND_INSTRUCTION
+                )
+                latest_bear = self.bear.query_json(bear_prompt)
+                debate_log.append({"round": r, "agent": "Bear Researcher", "output": latest_bear})
             
-            # Bear responds to Bull
-            opponent_section = DEBATE_ROUND_OPPONENT_SECTION.format(
-                opponent_argument=json.dumps(latest_bull, indent=2)
-            )
-            bear_prompt = DEBATE_PROMPT_TEMPLATE.format(
-                analyst_reports=reports_context,
-                opponent_section=opponent_section,
-                opponent_instruction=DEBATE_ROUND_INSTRUCTION
-            )
-            latest_bear = self.bear.query_json(bear_prompt)
-            debate_log.append({"round": r, "agent": "Bear Researcher", "output": latest_bear})
+        if is_reversed:
+            final_bull = latest_bear  # Bear agent was acting as Bull
+            final_bear = latest_bull  # Bull agent was acting as Bear
+        else:
+            final_bull = latest_bull
+            final_bear = latest_bear
             
         # ── Step 3: Synthesize Agreements and Disagreements ──────
-        logger.info("Synthesizing debate agreements and disagreements using Debate Synthesizer...")
+        logger.info("Synthesizing debate using Debate Synthesizer (Council Mode)...")
         synthesis_prompt = DEBATE_SYNTHESIS_TEMPLATE.format(
-            bull_report=json.dumps(latest_bull, indent=2),
-            bear_report=json.dumps(latest_bear, indent=2)
+            bull_report=json.dumps(final_bull, indent=2),
+            bear_report=json.dumps(final_bear, indent=2)
         )
         synthesis_result = self.synthesizer.query_json(synthesis_prompt)
         
-        agreements = synthesis_result.get("agreements", [])
+        # In Council Mode, we get consensus_points, disagreements, unique_findings, comprehensive_analysis
+        agreements = synthesis_result.get("consensus_points", [])
         disagreements = synthesis_result.get("disagreements", [])
+        unique_findings = synthesis_result.get("unique_findings", [])
+        comp_analysis = synthesis_result.get("comprehensive_analysis", "")
         
-        # Ensure agreements and disagreements are lists of strings
         if not isinstance(agreements, list):
             agreements = [str(agreements)] if agreements else []
         if not isinstance(disagreements, list):
             disagreements = [str(disagreements)] if disagreements else []
+        if not isinstance(unique_findings, list):
+            unique_findings = [str(unique_findings)] if unique_findings else []
             
         # Enforce accuracy of quantitative data layer agreement (grounded consensus on data)
         has_data_agreement = any("data layer" in a.lower() or "quantitative" in a.lower() for a in agreements)
         if not has_data_agreement:
             agreements.insert(0, "Both agents agree on the accuracy of the underlying quantitative data layer (price, volume, debt, PE ratios).")
             
-        # Calculate and prepend deterministic conviction-gap message
-        bull_conv = latest_bull.get("conviction", 5)
-        bear_conv = latest_bear.get("conviction", 5)
-        conviction_gap = abs(bull_conv - bear_conv)
-        conviction_msg = f"Conviction gap: Bull conviction is {bull_conv}/10 vs Bear conviction of {bear_conv}/10 (gap of {conviction_gap}/10)."
-        disagreements.insert(0, conviction_msg)
+        # Entropy-Modulated Confidence Scoring (EMCS)
+        bull_conv = final_bull.get("conviction", 5)
+        bear_conv = final_bear.get("conviction", 5)
         
-        logger.info("Debate committee finished deliberation.")
+        total_conv = bull_conv + bear_conv
+        entropy = 0.0
+        if total_conv > 0:
+            p_bull = bull_conv / total_conv
+            p_bear = bear_conv / total_conv
+            if p_bull > 0: entropy -= p_bull * math.log2(p_bull)
+            if p_bear > 0: entropy -= p_bear * math.log2(p_bear)
+            
+        base_confidence = (bull_conv + bear_conv) / 2.0
+        emcs_score = base_confidence * (1.0 - (entropy * 0.5))
+        
+        emcs_msg = f"EMCS (Entropy-Modulated Confidence Score): {emcs_score:.2f}/10. (Bull: {bull_conv}/10, Bear: {bear_conv}/10, Entropy: {entropy:.3f})"
+        disagreements.insert(0, emcs_msg)
+        
+        if comp_analysis:
+            agreements.append(f"Comprehensive Analysis: {comp_analysis}")
+        
+        logger.info(f"Debate committee finished deliberation. {emcs_msg}")
         return {
-            "bull_thesis": latest_bull.get("thesis", ""),
-            "bull_arguments": latest_bull.get("key_arguments", []),
-            "bear_thesis": latest_bear.get("thesis", ""),
-            "bear_arguments": latest_bear.get("key_arguments", []),
+            "bull_thesis": final_bull.get("thesis", ""),
+            "bull_arguments": final_bull.get("key_arguments", []),
+            "bear_thesis": final_bear.get("thesis", ""),
+            "bear_arguments": final_bear.get("key_arguments", []),
             "agreements": agreements,
             "disagreements": disagreements,
+            "unique_findings": unique_findings,
             "debate_log": debate_log
         }
+

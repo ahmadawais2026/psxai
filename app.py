@@ -231,6 +231,60 @@ def analyze_stock():
         }), 500
 
 
+@app.route("/api/analyze/stream", methods=["POST"])
+def analyze_stock_stream():
+    """Stream analysis events for real-time frontend updates using SSE."""
+    try:
+        data = request.json or {}
+        symbol = data.get("symbol", "").strip().upper()
+        if not symbol:
+            return jsonify({"error": "Ticker symbol is required"}), 400
+
+        model_name = data.get("model", "gemini-2.5-flash")
+
+        # Check API key configuration based on model selection
+        if "deepseek" in model_name.lower():
+            from config import DEEPSEEK_API_KEY
+            if not DEEPSEEK_API_KEY:
+                return jsonify({
+                    "error": "DeepSeek API key not configured. Please add DEEPSEEK_API_KEY to your config or environment variables."
+                }), 503
+        else:
+            if not GEMINI_API_KEY:
+                return jsonify({
+                    "error": "Gemini API key not configured. Please add GEMINI_API_KEY to your .env file."
+                }), 503
+
+        # Get portfolio context if requested
+        user_context = None
+        if data.get("include_portfolio", False):
+            try:
+                uid = _get_authenticated_uid(request)
+                if uid:
+                    pm = _get_portfolio_manager()
+                    user_context = pm.get_position_context(uid, symbol)
+            except Exception:
+                user_context = None
+
+        orchestrator = _get_orchestrator()
+
+        def generate():
+            try:
+                for event in orchestrator.analyze_stream(symbol, user_context=user_context, model_name=model_name):
+                    yield f"data: {json.dumps(event)}\n\n"
+            except Exception as e:
+                traceback.print_exc()
+                yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Stream setup failed: {str(e)}"}), 500
+
+
+
 # ══════════════════════════════════════════════════════════════
 #  PORTFOLIO MANAGEMENT
 # ══════════════════════════════════════════════════════════════

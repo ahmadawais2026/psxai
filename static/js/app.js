@@ -877,25 +877,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         showLoadingState();
 
         try {
-            // Set first step (technical) to working state
-            setStepStatus(stepTechnical, 'working');
-
-            // Simulate progress step updates
-            const stepUpdates = [
-                { step: stepTechnical, delay: 2000, next: stepFundamental },
-                { step: stepFundamental, delay: 4000, next: stepSentiment },
-                { step: stepSentiment, delay: 6000, next: stepRisk },
-                { step: stepRisk, delay: 8000, next: stepDebate },
-                { step: stepDebate, delay: 10000, next: stepRecommendation }
-            ];
-
-            stepUpdates.forEach(u => {
-                setTimeout(() => {
-                    if (isCurrentlyLoading()) {
-                        setStepStatus(u.step, 'done');
-                        setStepStatus(u.next, 'working');
-                    }
-                }, u.delay);
+            // Reset steps to pending
+            [stepTechnical, stepFundamental, stepSentiment, stepRisk, stepDebate, stepRecommendation].forEach(el => {
+                setStepStatus(el, 'pending');
             });
 
             // Build headers with Authorization Bearer if user is logged in
@@ -910,8 +894,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            // Send actual POST to backend analyzer
-            const res = await fetch(`${API_BASE}/api/analyze`, {
+            // Send POST to backend analyzer stream
+            const res = await fetch(`${API_BASE}/api/analyze/stream`, {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify({
@@ -921,18 +905,82 @@ document.addEventListener('DOMContentLoaded', async () => {
                 })
             });
 
-            const report = await res.json();
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.error || 'Server error during analysis');
+            }
 
-            if (res.ok) {
-                // Complete all steps
-                [stepTechnical, stepFundamental, stepSentiment, stepRisk, stepDebate, stepRecommendation].forEach(el => {
-                    setStepStatus(el, 'done');
-                });
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let done = false;
+            let buffer = '';
+            
+            const nodeStates = { technical: false, fundamental: false, sentiment: false, risk: false };
 
-                // Display reports
-                renderAnalysisReport(report);
-            } else {
-                throw new Error(report.error || 'Server error during analysis');
+            while (!done) {
+                const { value, done: readerDone } = await reader.read();
+                done = readerDone;
+                if (value) {
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || ''; // Keep incomplete line
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6);
+                            if (!dataStr.trim()) continue;
+                            try {
+                                const event = JSON.parse(dataStr);
+                                
+                                if (event.event === 'start') {
+                                    [stepTechnical, stepFundamental, stepSentiment, stepRisk].forEach(el => {
+                                        setStepStatus(el, 'working');
+                                    });
+                                } else if (event.event === 'node_finish') {
+                                    if (event.node === 'technical') {
+                                        setStepStatus(stepTechnical, 'done');
+                                        nodeStates.technical = true;
+                                    } else if (event.node === 'fundamental') {
+                                        setStepStatus(stepFundamental, 'done');
+                                        nodeStates.fundamental = true;
+                                    } else if (event.node === 'sentiment') {
+                                        setStepStatus(stepSentiment, 'done');
+                                        nodeStates.sentiment = true;
+                                    } else if (event.node === 'risk') {
+                                        setStepStatus(stepRisk, 'done');
+                                        nodeStates.risk = true;
+                                    } else if (event.node === 'debate') {
+                                        setStepStatus(stepDebate, 'done');
+                                        setStepStatus(stepRecommendation, 'working');
+                                    } else if (event.node === 'portfolio' || event.node === 'portfolio_custom') {
+                                        setStepStatus(stepRecommendation, 'done');
+                                    }
+                                    
+                                    // If all 4 analysts finished, debate is working
+                                    if (nodeStates.technical && nodeStates.fundamental && nodeStates.sentiment && nodeStates.risk) {
+                                        if (stepDebate.querySelector('.status-icon') && !stepDebate.querySelector('.status-icon').innerHTML.includes('text-green-500')) {
+                                            // Only set to working if not already done
+                                            if (event.node !== 'debate') {
+                                                setStepStatus(stepDebate, 'working');
+                                            }
+                                        }
+                                    }
+                                } else if (event.event === 'complete' || event.event === 'cache_hit') {
+                                    if (event.report) {
+                                        [stepTechnical, stepFundamental, stepSentiment, stepRisk, stepDebate, stepRecommendation].forEach(el => {
+                                            setStepStatus(el, 'done');
+                                        });
+                                        renderAnalysisReport(event.report);
+                                    }
+                                } else if (event.event === 'error') {
+                                    throw new Error(event.message || 'Stream error');
+                                }
+                            } catch (e) {
+                                console.error("Error parsing stream event:", e, dataStr);
+                            }
+                        }
+                    }
+                }
             }
 
         } catch (err) {

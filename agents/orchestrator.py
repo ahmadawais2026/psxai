@@ -27,6 +27,23 @@ from data.local_data import get_market_context, get_financials_text, get_researc
 logger = logging.getLogger(__name__)
 
 
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict, Annotated, Dict, Any, Optional
+import operator
+
+class FinancialConsensusState(TypedDict):
+    symbol: str
+    model_name: Optional[str]
+    user_context: Optional[Dict[str, Any]]
+    agent_context: Dict[str, Any]
+    technical_report: Optional[Dict[str, Any]]
+    fundamental_report: Optional[Dict[str, Any]]
+    sentiment_report: Optional[Dict[str, Any]]
+    risk_report: Optional[Dict[str, Any]]
+    debate_result: Optional[Dict[str, Any]]
+    recommendation: Optional[Dict[str, Any]]
+
+
 class Orchestrator:
     """Core coordinator of the multi-agent analysis pipeline."""
 
@@ -38,18 +55,95 @@ class Orchestrator:
         self.risk_analyst = RiskAnalystAgent()
         self.research_team = ResearchTeam()
         self.portfolio_manager = PortfolioManagerAgent()
+        self.graph = self._build_graph()
+
+    def _build_graph(self):
+        """Build the LangGraph parallel execution graph."""
+        workflow = StateGraph(FinancialConsensusState)
+
+        def node_technical(state: FinancialConsensusState):
+            logger.info(f"LangGraph: Running Technical Analyst for {state['symbol']}...")
+            rep = self.technical_analyst.analyze(state["symbol"], context=state["agent_context"])
+            return {"technical_report": rep}
+
+        def node_fundamental(state: FinancialConsensusState):
+            logger.info(f"LangGraph: Running Fundamental Analyst for {state['symbol']}...")
+            rep = self.fundamentals_analyst.analyze(state["symbol"], context=state["agent_context"])
+            return {"fundamental_report": rep}
+
+        def node_sentiment(state: FinancialConsensusState):
+            logger.info(f"LangGraph: Running Sentiment Analyst for {state['symbol']}...")
+            rep = self.sentiment_analyst.analyze(state["symbol"], context=state["agent_context"])
+            return {"sentiment_report": rep}
+
+        def node_risk(state: FinancialConsensusState):
+            logger.info(f"LangGraph: Running Risk Analyst for {state['symbol']}...")
+            # Use the general context (user_context is the general one here)
+            rep = self.risk_analyst.analyze(state["symbol"], portfolio_context=state["user_context"], context=state["agent_context"])
+            return {"risk_report": rep}
+
+        def node_debate(state: FinancialConsensusState):
+            logger.info(f"LangGraph: Running Research Team Debate for {state['symbol']}...")
+            reports = {
+                "technical": state["technical_report"],
+                "fundamental": state["fundamental_report"],
+                "sentiment": state["sentiment_report"],
+                "risk": state["risk_report"]
+            }
+            res = self.research_team.debate(reports, rounds=2)
+            return {"debate_result": res}
+
+        def node_portfolio(state: FinancialConsensusState):
+            logger.info(f"LangGraph: Running Portfolio Manager for {state['symbol']}...")
+            reports = {
+                "technical": state["technical_report"],
+                "fundamental": state["fundamental_report"],
+                "sentiment": state["sentiment_report"],
+                "risk": state["risk_report"]
+            }
+            rec = self.portfolio_manager.generate_recommendation(
+                symbol=state["symbol"],
+                analyst_reports=reports,
+                debate_result=state["debate_result"],
+                user_context=state["user_context"]
+            )
+            return {"recommendation": rec}
+
+        workflow.add_node("technical", node_technical)
+        workflow.add_node("fundamental", node_fundamental)
+        workflow.add_node("sentiment", node_sentiment)
+        workflow.add_node("risk", node_risk)
+        workflow.add_node("debate", node_debate)
+        workflow.add_node("portfolio", node_portfolio)
+
+        # Parallel fan-out
+        workflow.add_edge(START, "technical")
+        workflow.add_edge(START, "fundamental")
+        workflow.add_edge(START, "sentiment")
+        workflow.add_edge(START, "risk")
+
+        # Fan-in to debate
+        workflow.add_edge(["technical", "fundamental", "sentiment", "risk"], "debate")
+
+        # Debate to Portfolio
+        workflow.add_edge("debate", "portfolio")
+        workflow.add_edge("portfolio", END)
+
+        return workflow.compile()
 
     def analyze(self, symbol: str, user_context: Optional[Dict[str, Any]] = None, model_name: Optional[str] = None) -> Dict[str, Any]:
+        """Backward compatible non-streaming wrapper."""
+        final_report = None
+        for event in self.analyze_stream(symbol, user_context, model_name):
+            if event.get("event") == "complete":
+                final_report = event.get("report")
+        if not final_report:
+            raise ValueError("Pipeline did not complete successfully.")
+        return final_report
+
+    def analyze_stream(self, symbol: str, user_context: Optional[Dict[str, Any]] = None, model_name: Optional[str] = None):
         """
-        Run the complete multi-agent analysis pipeline for a ticker.
-        
-        Args:
-            symbol: Ticker symbol (e.g. 'OGDC')
-            user_context: Optional manual override for user portfolio details.
-            model_name: Optional custom AI model name to use.
-            
-        Returns:
-            Dict: Comprehensive advisory report.
+        Run the complete multi-agent pipeline using LangGraph, yielding status updates as SSE dicts.
         """
         symbol = symbol.strip().upper()
         
@@ -67,7 +161,6 @@ class Orchestrator:
         cache_key = f"analysis:{symbol}:{model_name}" if model_name else f"analysis:{symbol}"
         cached_report = get_cached(cache_key, ttl_seconds=3600)  # 1 hour cache
         
-        # Determine if user has active holdings context to inject
         has_active_holdings = (
             user_context is not None 
             and user_context.get("owns_stock", False) 
@@ -76,12 +169,14 @@ class Orchestrator:
         
         if cached_report:
             logger.info(f"Cache hit for analysis of symbol: {symbol}")
+            yield {"event": "cache_hit"}
+            
             if not has_active_holdings:
-                # No custom portfolio context needed, return cached report directly
-                return cached_report
+                yield {"event": "complete", "report": cached_report}
+                return
             else:
-                # Re-run only the Portfolio Manager using the cached reports to inject user context
                 logger.info(f"Re-running Portfolio Manager for {symbol} with user context...")
+                yield {"event": "node_finish", "node": "portfolio_custom"}
                 analyst_reports = {
                     "technical": cached_report["technical_report"],
                     "fundamental": cached_report["fundamental_report"],
@@ -97,30 +192,29 @@ class Orchestrator:
                 report_copy = dict(cached_report)
                 report_copy["recommendation"] = final_recommendation
                 report_copy["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                return report_copy
+                yield {"event": "complete", "report": report_copy}
+                return
 
         # ── Cache Miss: Run Full Pipeline ────────────────────────
         logger.info(f"Cache miss for analysis of symbol: {symbol}. Running full pipeline...")
+        yield {"event": "start"}
 
-        # Fetch current quote first to validate the ticker
         quote = get_quote(symbol)
         if not quote or "error" in quote:
             err_msg = quote.get("error", "Unknown error") if quote else "No response from data layer"
-            raise ValueError(f"Ticker symbol '{symbol}' could not be resolved on PSX. Error: {err_msg}")
+            yield {"event": "error", "message": f"Ticker symbol '{symbol}' could not be resolved on PSX. Error: {err_msg}"}
+            return
 
         # ── Step 1: Validate Ticker & Retrieve metadata ───────────
         company_name = symbol
         sector = "Unknown"
 
-        # Look up in curated PSX tickers
         if symbol in PSX_TICKERS:
             ticker_info = PSX_TICKERS[symbol]
             company_name = ticker_info.get("name", symbol)
             sector = ticker_info.get("sector", "Unknown")
         else:
-            logger.warning(f"Symbol {symbol} not found in curated PSX tickers list. Fetching dynamically...")
             company_name = quote.get("name", symbol)
-            # Clean up comma-separated yfinance fund names if present
             if "," in company_name and (".KA" in company_name or symbol in company_name):
                 company_name = company_name.split(",")[0].replace(".KA", "").strip()
 
@@ -134,17 +228,14 @@ class Orchestrator:
                 sector = "Unknown"
 
         # ── Step 2: Pre-fetch live data & build shared context ────
-        # Fetch fresh company news from AskAnalyst (non-blocking — failure is OK)
+        yield {"event": "data_fetch", "status": "working"}
         try:
             from data.live_scraper import fetch_company_news_live, refresh_market_news
-            logger.info(f"Fetching live company news for {symbol}...")
             fetch_company_news_live(symbol)
-            logger.info("Refreshing general market news...")
             refresh_market_news()
         except Exception as e:
             logger.warning(f"Live news pre-fetch failed (non-fatal): {e}")
 
-        # Build the rich context bundle passed to every agent
         agent_context = {
             "sector": sector,
             "company_name": company_name,
@@ -153,8 +244,9 @@ class Orchestrator:
             "research_reports": get_research_reports(symbol, sector=sector, max_reports=5),
             "company_news": get_local_company_news(symbol),
         }
+        
+        yield {"event": "data_fetch", "status": "done"}
 
-        # To build a clean general cache entry, we run the analysts with empty portfolio context
         general_context = {
             "owns_stock": False,
             "shares": 0.0,
@@ -164,80 +256,76 @@ class Orchestrator:
             "is_concentrated": False
         }
 
-        # ── Step 3: Run Analyst Agents (Sequential due to rate limits) ──
-        # Technical Analyst
-        tech_report = self.technical_analyst.analyze(symbol, context=agent_context)
-
-        # Fundamental Analyst
-        fund_report = self.fundamentals_analyst.analyze(symbol, context=agent_context)
-
-        # Sentiment Analyst
-        sent_report = self.sentiment_analyst.analyze(symbol, context=agent_context)
-
-        # Risk Analyst with general context
-        risk_report = self.risk_analyst.analyze(symbol, portfolio_context=general_context, context=agent_context)
-        
-        # Compile analyst reports dictionary
-        analyst_reports = {
-            "technical": tech_report,
-            "fundamental": fund_report,
-            "sentiment": sent_report,
-            "risk": risk_report
+        # ── Step 3: Run LangGraph Pipeline ────────────────────────
+        initial_state = {
+            "symbol": symbol,
+            "model_name": model_name,
+            "user_context": general_context,
+            "agent_context": agent_context,
+            "technical_report": None,
+            "fundamental_report": None,
+            "sentiment_report": None,
+            "risk_report": None,
+            "debate_result": None,
+            "recommendation": None
         }
-        
-        # ── Step 4: Run Researcher Committee Debate ──────────────
-        debate_result = self.research_team.debate(analyst_reports, rounds=2)
-        
-        # ── Step 5: Run Portfolio Manager with general context ──
-        general_recommendation = self.portfolio_manager.generate_recommendation(
-            symbol=symbol,
-            analyst_reports=analyst_reports,
-            debate_result=debate_result,
-            user_context=general_context
-        )
-        
+
+        current_state = initial_state.copy()
+
+        # Stream events from LangGraph
+        for step_event in self.graph.stream(initial_state, {"recursion_limit": 50}):
+            for node_name, updates in step_event.items():
+                yield {"event": "node_finish", "node": node_name}
+                current_state.update(updates)
+
         # ── Step 6: Compile overall general dossier ───────────────
+        debate_res = current_state.get("debate_result", {})
+        
         general_report = {
             "symbol": symbol,
             "company_name": company_name,
             "sector": sector,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "quote": quote,
-            "technical_report": tech_report,
-            "fundamental_report": fund_report,
-            "sentiment_report": sent_report,
-            "risk_report": risk_report,
+            "technical_report": current_state.get("technical_report"),
+            "fundamental_report": current_state.get("fundamental_report"),
+            "sentiment_report": current_state.get("sentiment_report"),
+            "risk_report": current_state.get("risk_report"),
             "debate": {
-                "bull_thesis": debate_result.get("bull_thesis", ""),
-                "bull_arguments": debate_result.get("bull_arguments", []),
-                "bear_thesis": debate_result.get("bear_thesis", ""),
-                "bear_arguments": debate_result.get("bear_arguments", []),
-                "agreements": debate_result.get("agreements", []),
-                "disagreements": debate_result.get("disagreements", [])
+                "bull_thesis": debate_res.get("bull_thesis", ""),
+                "bull_arguments": debate_res.get("bull_arguments", []),
+                "bear_thesis": debate_res.get("bear_thesis", ""),
+                "bear_arguments": debate_res.get("bear_arguments", []),
+                "agreements": debate_res.get("agreements", []),
+                "disagreements": debate_res.get("disagreements", [])
             },
-            "recommendation": general_recommendation,
+            "recommendation": current_state.get("recommendation"),
             "disclaimer": DISCLAIMER
         }
         
-        # Save to cache
         set_cached(cache_key, general_report)
         logger.info(f"General report cached for symbol: {symbol}")
         
-        # If user has active holdings, generate recommendation for their custom context and return it
         if has_active_holdings:
             logger.info(f"Generating custom recommendation for user context...")
+            yield {"event": "node_finish", "node": "portfolio_custom"}
+            analyst_reports = {
+                "technical": general_report["technical_report"],
+                "fundamental": general_report["fundamental_report"],
+                "sentiment": general_report["sentiment_report"],
+                "risk": general_report["risk_report"]
+            }
             final_recommendation = self.portfolio_manager.generate_recommendation(
                 symbol=symbol,
                 analyst_reports=analyst_reports,
-                debate_result=debate_result,
+                debate_result=debate_res,
                 user_context=user_context
             )
             custom_report = dict(general_report)
             custom_report["recommendation"] = final_recommendation
-            return custom_report
-            
-        logger.info(f"Orchestrator pipeline complete for symbol: {symbol}")
-        return general_report
+            yield {"event": "complete", "report": custom_report}
+        else:
+            yield {"event": "complete", "report": general_report}
 
     def quick_quote(self, symbol: str) -> Dict[str, Any]:
         """Fetch quick stock quote information."""
