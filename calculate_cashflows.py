@@ -34,6 +34,7 @@ Outputs:
 """
 
 import os
+import re
 import numpy as np
 import pandas as pd
 
@@ -42,7 +43,7 @@ EXPLAINED_HIGH   = 80   # % of gross cash flow cleanly attributed → HIGH confi
 EXPLAINED_MED    = 50   # ≥ this → MEDIUM; below → LOW
 
 
-# ─── Row finder (keyword substring matching) ──────────────────────────────────
+# ─── Row finder (keyword substring matching & fuzzy fallback) ─────────────────
 
 KEYWORDS = {
     # Major totals — present in every company
@@ -72,12 +73,74 @@ KEYWORDS = {
     "dps":        [("dps",)],
 }
 
+NAME_STOPWORDS = {
+    "limited", "ltd", "the", "company", "co", "pvt", "private", "corporation", 
+    "corp", "inc", "and", "or", "of", "with", "to", "for", "at", "by", "in", 
+    "on", "from", "a", "an", "as", "&"
+}
+
+def _get_tokens(s: str) -> set[str]:
+    """Tokenize a string for similarity checking, ignoring common stopwords."""
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", str(s).lower())
+    return {t for t in cleaned.split() if t and t not in NAME_STOPWORDS}
+
+def _tokens_match(t1: str, t2: str) -> bool:
+    """Check if two tokens are similar (exact, plural, or prefix match)."""
+    if t1 == t2:
+        return True
+    # Plural check
+    if t1 + 's' == t2 or t2 + 's' == t1:
+        return True
+    # Prefix check (length >= 4) to handle abbreviations
+    if len(t1) >= 4 and len(t2) >= 4:
+        if t1.startswith(t2) or t2.startswith(t1):
+            return True
+    return False
+
+def _dice_coefficient(a: str, b: str) -> float:
+    """Compute Dice similarity coefficient between two strings based on tokens with prefix/plural support."""
+    ta = _get_tokens(a)
+    tb = _get_tokens(b)
+    if not ta or not tb:
+        return 0.0
+        
+    common = 0
+    tb_matched = set()
+    for t1 in ta:
+        for t2 in tb:
+            if t2 not in tb_matched and _tokens_match(t1, t2):
+                common += 1
+                tb_matched.add(t2)
+                break
+                
+    return (2.0 * common) / (len(ta) + len(tb))
 
 def find_row(df, key):
+    # First attempt: exact substring match (preserving original strict path)
     for group in KEYWORDS.get(key, []):
         for idx in df.index:
             if all(kw in str(idx).lower() for kw in group):
                 return idx
+                
+    # Second attempt: fuzzy token-based matching if exact match fails
+    best_idx = None
+    best_score = 0.0
+    threshold = 0.75  # Safe similarity threshold
+    
+    targets = [" ".join(group) for group in KEYWORDS.get(key, [])]
+    
+    for idx in df.index:
+        idx_str = str(idx).lower()
+        for target in targets:
+            score = _dice_coefficient(idx_str, target)
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+                
+    if best_score >= threshold:
+        print(f"  [fuzzy match] Resolved '{best_idx}' for key '{key}' (target: '{targets[0]}', score: {best_score:.2f})")
+        return best_idx
+        
     return None
 
 

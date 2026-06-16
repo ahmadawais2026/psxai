@@ -28,3 +28,4 @@ scratch/
 # Personal-use scripts — not for GitHub
 scrape_zakheera_financials.py
 beautiful_financials/
+.firebase/
