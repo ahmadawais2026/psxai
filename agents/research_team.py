@@ -100,9 +100,9 @@ class ResearchTeam:
                 is_reversed = True
                 
                 # Swap personas
-                bull_persona_temp = self.bull.system_prompt
-                self.bull.system_prompt = self.bear.system_prompt
-                self.bear.system_prompt = bull_persona_temp
+                bull_persona_temp = self.bull.persona
+                self.bull.persona = self.bear.persona
+                self.bear.persona = bull_persona_temp
                 
                 # Bull (acting as Bear) responds to Bear (who was acting as Bear)
                 opponent_section = DEBATE_ROUND_OPPONENT_SECTION.format(
