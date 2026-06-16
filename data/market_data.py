@@ -260,10 +260,10 @@ def get_quote(symbol: str) -> Dict[str, Any]:
                 res = r.json()
                 data = res.get("data", [])
                 if data:
-                    price = float(data[0][1])
+                    price = float(data[-1][1])  # Latest price tick
                     day_high = float(max(x[1] for x in data))
                     day_low = float(min(x[1] for x in data))
-                    open_val = float(data[-1][1])
+                    open_val = float(data[0][1])  # Opening price tick
                     volume = int(sum(x[2] for x in data))
                     
                     # 2. Fetch yfinance history only with period="2d" for previous close (LDCP)
