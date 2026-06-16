@@ -277,7 +277,11 @@ def analyze_stock_stream():
                 yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
 
         from flask import Response, stream_with_context
-        return Response(stream_with_context(generate()), mimetype="text/event-stream")
+        response = Response(stream_with_context(generate()), mimetype="text/event-stream")
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Connection"] = "keep-alive"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
 
     except Exception as e:
         traceback.print_exc()
