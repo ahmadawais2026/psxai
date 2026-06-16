@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let portfolio = [];
     let currentTheme = 'dark';
     let currentReport = null;   // stores the full analysis report for PDF download
-    let selectedModel = localStorage.getItem('psx_selected_model') || 'gemini-3.1-flash-lite';
+    let selectedModel = localStorage.getItem('psx_selected_model') || 'gemini-3.5-flash';
 
     // ── DOM ELEMENTS ─────────────────────────────────────────────────
     // Theme Toggle

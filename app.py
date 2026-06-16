@@ -185,7 +185,7 @@ def analyze_stock():
     try:
         data = request.get_json(force=True)
         symbol = data.get("symbol", "").strip().upper()
-        model_name = data.get("model", "").strip() or "gemini-3.1-flash-lite"
+        model_name = data.get("model", "").strip() or "gemini-3.5-flash"
 
         if not symbol:
             return jsonify({"error": "Symbol is required"}), 400
