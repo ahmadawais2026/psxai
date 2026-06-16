@@ -250,63 +250,26 @@ def get_quote(symbol: str) -> Dict[str, Any]:
     try:
         # 1. Try to fetch real-time quote from the official PSX Data Portal
         psx_quote = None
-        url = f"https://dps.psx.com.pk/timeseries/int/{local}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
         try:
-            r = _session.get(url, headers=headers, timeout=5)
-            if r.status_code == 200:
-                res = r.json()
-                data = res.get("data", [])
-                if data:
-                    price = float(data[-1][1])  # Latest price tick
-                    day_high = float(max(x[1] for x in data))
-                    day_low = float(min(x[1] for x in data))
-                    open_val = float(data[0][1])  # Opening price tick
-                    volume = int(sum(x[2] for x in data))
-                    
-                    # 2. Fetch yfinance history only with period="2d" for previous close (LDCP)
-                    prev_close = price
-                    try:
-                        ticker = yf.Ticker(_yahoo_symbol(symbol))
-                        hist = ticker.history(period="2d", timeout=5)
-                        if not hist.empty:
-                            if len(hist) >= 2:
-                                import datetime
-                                today_str = datetime.date.today().strftime("%Y-%m-%d")
-                                last_hist_date = hist.index[-1].strftime("%Y-%m-%d")
-                                if last_hist_date == today_str:
-                                    prev_close = float(hist["Close"].iloc[-2])
-                                else:
-                                    prev_close = float(hist["Close"].iloc[-1])
-                            else:
-                                prev_close = float(hist["Close"].iloc[-1])
-                    except Exception as yf_exc:
-                        logger.warning("yfinance quick history fetch failed for %s: %s", local, yf_exc)
-                    
-                    if prev_close == 0.0:
-                        prev_close = price
-                        
-                    change = price - prev_close
-                    change_percent = (change / prev_close) * 100 if prev_close != 0.0 else 0.0
-                    
-                    psx_quote = {
-                        "symbol":                local,
-                        "name":                  _get_clean_name(local, {}),
-                        "price":                 price,
-                        "change":               change,
-                        "change_percent":       change_percent,
-                        "volume":               volume,
-                        "market_cap":           0,
-                        "day_high":             day_high,
-                        "day_low":              day_low,
-                        "open":                 open_val,
-                        "previous_close":       prev_close,
-                        "fifty_two_week_high":  0,
-                        "fifty_two_week_low":   0,
-                        "currency":             "PKR",
-                    }
+            from data import psx_portal
+            portal_quote = psx_portal.fetch_single_quote(local)
+            if portal_quote:
+                psx_quote = {
+                    "symbol":                local,
+                    "name":                  _get_clean_name(local, {}),
+                    "price":                 portal_quote["current"],
+                    "change":               portal_quote["change"],
+                    "change_percent":       portal_quote["change_percent"],
+                    "volume":               portal_quote["volume"],
+                    "market_cap":           0,
+                    "day_high":             portal_quote["high"],
+                    "day_low":              portal_quote["low"],
+                    "open":                 portal_quote["open"],
+                    "previous_close":       portal_quote["ldcp"],
+                    "fifty_two_week_high":  0,
+                    "fifty_two_week_low":   0,
+                    "currency":             "PKR",
+                }
         except Exception as exc:
             logger.warning("PSX Portal fetch failed for %s: %s", local, exc)
 
@@ -413,6 +376,43 @@ def get_history(
             pass  # fall through to fresh fetch
 
     try:
+        if interval == "1d":
+            try:
+                from data import psx_portal
+                df = psx_portal.fetch_eod_history(local)
+                if not df.empty:
+                    import datetime
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    limit_date = None
+                    if period == "1mo":
+                        limit_date = now - datetime.timedelta(days=31)
+                    elif period == "3mo":
+                        limit_date = now - datetime.timedelta(days=92)
+                    elif period == "6mo":
+                        limit_date = now - datetime.timedelta(days=183)
+                    elif period == "1y":
+                        limit_date = now - datetime.timedelta(days=366)
+                    elif period == "2y":
+                        limit_date = now - datetime.timedelta(days=731)
+                    elif period == "5y":
+                        limit_date = now - datetime.timedelta(days=1826)
+
+                    if limit_date:
+                        df = df[df.index >= limit_date]
+
+                    min_points = 15 if period == "1mo" else 30
+                    if len(df) >= min_points:
+                        df_reset = df.reset_index()
+                        if "Date" in df_reset.columns:
+                            df_reset["Date"] = df_reset["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                        cache_data = df_reset.to_dict(orient="records")
+                        set_cached(cache_key, cache_data)
+                        return df
+                logger.info("PSX EOD history empty or insufficient for %s, trying yfinance", local)
+            except Exception as p_exc:
+                logger.warning("PSX EOD history failed for %s: %s, trying yfinance", local, p_exc)
+
+        # Fallback to yfinance
         ticker = yf.Ticker(_yahoo_symbol(symbol))
         df: pd.DataFrame = ticker.history(period=period, interval=interval, timeout=5)
 
@@ -431,7 +431,13 @@ def get_history(
         df = df[keep_cols]
 
         # Cache as serialisable records
-        cache_data = df.reset_index().to_dict(orient="records")
+        df_reset = df.reset_index()
+        if "Date" in df_reset.columns:
+            if hasattr(df_reset["Date"].dt, "strftime"):
+                df_reset["Date"] = df_reset["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                df_reset["Date"] = df_reset["Date"].astype(str)
+        cache_data = df_reset.to_dict(orient="records")
         set_cached(cache_key, cache_data)
 
         return df

@@ -53,6 +53,9 @@ CACHE_TTL_NEWS = 60 * 60          # 1 hour
 # ── PSX Configuration ────────────────────────────────────────
 PSX_SUFFIX = ".KA"                # Yahoo Finance suffix for Karachi Stock Exchange
 DEFAULT_CURRENCY = "PKR"
+PSX_PORTAL_BASE = "https://dps.psx.com.pk"
+CACHE_TTL_MARKET_WATCH = 15       # 15 seconds Cache TTL for Market Watch HTML page
+
 
 # ── Analysis Configuration ────────────────────────────────────
 HISTORY_PERIOD_DAILY = "1y"       # 1 year of daily data for technical analysis

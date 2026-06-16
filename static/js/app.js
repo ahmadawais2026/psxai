@@ -1179,6 +1179,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         let detailsHtml = '<div style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px;">';
         
+        if (report.sector_framework_applied) {
+            detailsHtml += `
+                <div style="background: var(--bg-card-hover); padding: 8px 12px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-start);">
+                    <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Sector Framework Applied</div>
+                    <div style="font-weight: 600; color: var(--text-primary); margin-top: 2px;">${report.sector_framework_applied}</div>
+                </div>
+            `;
+        }
+        
+        if (report.erp_context) {
+            detailsHtml += `
+                <div>
+                    <span class="card-data-label" style="font-weight: 700;">Macro & ERP Context</span>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
+                        ${report.erp_context}
+                    </p>
+                </div>
+            `;
+        }
+
+        if (report.sector_specific_metrics && Object.keys(report.sector_specific_metrics).length > 0) {
+            detailsHtml += `
+                <div>
+                    <span class="card-data-label" style="font-weight: 700;">Sector-Specific Metrics</span>
+                    <ul style="padding-left: 16px; margin-top: 4px; font-size: 0.8rem; color: var(--text-secondary);">
+                        ${Object.entries(report.sector_specific_metrics).map(([key, value]) => `
+                            <li style="margin-bottom: 3px;"><strong>${key.replace(/_/g, ' ')}:</strong> ${value}</li>
+                        `).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+        
         if (report.strengths && report.strengths.length > 0) {
             detailsHtml += `
                 <div>
@@ -1226,46 +1259,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function renderSentimentCard(report) {
-        const sentiment = report.overall_sentiment.toUpperCase();
-        badgeSentimentScore.textContent = `${sentiment} (${report.sentiment_score > 0 ? '+' : ''}${report.sentiment_score})`;
-        badgeSentimentScore.className = `badge badge--${getSentimentClass(report.overall_sentiment)}`;
+        // Adjusted Score is from -100 to 100
+        const score = report.adjusted_score || 0;
+        let sentimentWord = "NEUTRAL";
+        let sentimentClass = "neutral";
+        if (score > 15) { sentimentWord = "BULLISH"; sentimentClass = "bullish"; }
+        else if (score < -15) { sentimentWord = "BEARISH"; sentimentClass = "bearish"; }
 
-        let narrativesHtml = '';
-        if (report.key_narratives && report.key_narratives.length > 0) {
-            narrativesHtml += `
-                <div style="margin-top: 12px;">
-                    <span class="card-data-label" style="font-weight: 700;">Key Sentiment Drivers</span>
-                    <ul style="padding-left: 16px; margin-top: 4px; font-size: 0.8rem; color: var(--text-secondary);">
-                        ${report.key_narratives.map(n => `<li style="margin-bottom: 3px;">${n}</li>`).join('')}
-                    </ul>
+        badgeSentimentScore.textContent = `${sentimentWord} (${score > 0 ? '+' : ''}${score})`;
+        badgeSentimentScore.className = `badge badge--${sentimentClass}`;
+
+        let categoriesHtml = `
+            <div style="background: var(--bg-card-hover); padding: 8px 12px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-start); margin-top: 12px;">
+                <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Dominant Narrative Category</div>
+                <div style="font-weight: 600; color: var(--text-primary); margin-top: 2px;">
+                    ${report.news_category || "Retail & Market Rumors"} 
+                    <span style="font-size: 0.7rem; color: var(--text-tertiary); background: var(--bg-card); padding: 2px 6px; border-radius: 4px; margin-left: 6px;">Weight: x${report.weight_multiplier || 1.0}</span>
+                </div>
+            </div>
+        `;
+
+        let entitiesHtml = '';
+        if (report.primary_entities && report.primary_entities.length > 0) {
+            entitiesHtml = `
+                <div style="margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+                    <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary);">Entities:</span>
+                    ${report.primary_entities.map(e => `<span style="background: var(--bg-card); color: var(--text-primary); padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; border: 1px solid var(--border-subtle);">${e}</span>`).join('')}
                 </div>
             `;
         }
 
-        let sentimentBarHtml = '';
-        if (report.sentiment_score !== undefined) {
-            // Score from -10 to +10, map to 0 to 100%
-            const pct = ((report.sentiment_score + 10) / 20) * 100;
-            sentimentBarHtml = `
-                <div class="sentiment-gauge">
-                    <div class="sentiment-gauge-marker" style="left: ${pct}%;"></div>
-                </div>
-                <div class="sentiment-gauge-labels">
-                    <span>Fear (-10)</span>
-                    <span>Neutral</span>
-                    <span>Greed (+10)</span>
+        let citationsHtml = '';
+        if (report.verbatim_citations && report.verbatim_citations.length > 0) {
+            citationsHtml = `
+                <div style="margin-top: 14px;">
+                    <span class="card-data-label" style="font-weight: 700;">Verbatim Citations</span>
+                    <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 6px;">
+                        ${report.verbatim_citations.map(c => `
+                            <blockquote style="margin: 0; padding: 6px 10px; border-left: 2px solid var(--text-tertiary); background: var(--bg-card-hover); font-style: italic; font-size: 0.8rem; color: var(--text-secondary);">
+                                "${c}"
+                            </blockquote>
+                        `).join('')}
+                    </div>
                 </div>
             `;
         }
+
+        const pct = ((score + 100) / 200) * 100;
+        let sentimentBarHtml = `
+            <div class="sentiment-gauge" style="margin-top: 16px;">
+                <div class="sentiment-gauge-marker" style="left: ${pct}%;"></div>
+            </div>
+            <div class="sentiment-gauge-labels">
+                <span>Fear (-100)</span>
+                <span>Neutral</span>
+                <span>Greed (+100)</span>
+            </div>
+        `;
 
         contentSentiment.innerHTML = `
-            <p class="card-narrative">${report.summary}</p>
+            <p class="card-narrative" style="line-height: 1.5;">${report.analytical_reasoning || "No analytical reasoning provided."}</p>
+            ${categoriesHtml}
+            ${entitiesHtml}
+            ${citationsHtml}
             ${sentimentBarHtml}
-            ${narrativesHtml}
-            <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
-                <span class="card-data-label">Confidence:</span>
-                <span class="card-data-value data-font" style="color: var(--accent-start); font-weight: 700;">${report.confidence}/10</span>
-            </div>
         `;
     }
 
