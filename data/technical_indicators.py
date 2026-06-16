@@ -778,10 +778,10 @@ def _compute_vwma(close: pd.Series, volume: pd.Series, window: int = 20) -> Dict
         vwma = sum_pv / sum_vol
         vwma_val = _latest(vwma)
         current_close = float(close.iloc[-1])
-        
+
         if vwma_val is None:
             return {"value": None, "interpretation": "Insufficient data"}
-            
+
         bias = "Above VWMA (Bullish accumulation)" if current_close > vwma_val else "Below VWMA (Bearish distribution)"
         return {
             "value": round(vwma_val, 2),
@@ -789,3 +789,522 @@ def _compute_vwma(close: pd.Series, volume: pd.Series, window: int = 20) -> Dict
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ── ADVANCED QUANTITATIVE RISK ARCHITECTURE ───────────────────────────
+# ══════════════════════════════════════════════════════════════════════
+#
+# All five functions below implement the mathematical framework described
+# in the Adler-Dumas / Ledoit-Wolf / Black-Litterman literature, adapted
+# for PSX emerging-market conditions.
+#
+# Design principle (FinAgent): every calculation is deterministic Python.
+# The LLM in risk_analyst.py only *reasons* over the output dicts.
+#
+# Public entry point: compute_advanced_risk_suite()
+# ══════════════════════════════════════════════════════════════════════
+
+
+def compute_cvar(
+    returns: pd.Series,
+    confidence: float = 0.95,
+) -> Dict[str, Any]:
+    """
+    Compute Value at Risk (VaR) and Conditional Value at Risk (CVaR /
+    Expected Shortfall) for a series of daily returns.
+
+    CVaR is the mean of all losses that exceed VaR — a coherent risk
+    measure that correctly captures fat-tail risk in PSX returns.
+
+    Args:
+        returns:    pandas Series of daily percentage returns (e.g. 0.02
+                    for +2%).  NaN values are dropped internally.
+        confidence: Confidence level for VaR/CVaR (default 0.95 → 95%).
+
+    Returns:
+        Dict with:
+            ``var``             — VaR at the given confidence level (negative = loss)
+            ``cvar``            — CVaR / Expected Shortfall (negative = loss)
+            ``confidence``      — The confidence level used
+            ``tail_obs``        — Number of return observations in the tail
+            ``interpretation``  — Plain-English narrative
+    """
+    r = returns.dropna()
+    if len(r) < 30:
+        return {
+            "var": None, "cvar": None, "confidence": confidence,
+            "tail_obs": 0, "interpretation": "Insufficient data (< 30 observations)"
+        }
+
+    var_threshold = float(np.percentile(r, (1 - confidence) * 100))
+    tail = r[r <= var_threshold]
+    cvar = float(tail.mean()) if len(tail) > 0 else var_threshold
+
+    var_pct  = round(var_threshold * 100, 3)
+    cvar_pct = round(cvar * 100, 3)
+
+    if cvar_pct < -5.0:
+        severity = "SEVERE tail risk — daily losses >5% in worst scenarios"
+    elif cvar_pct < -3.0:
+        severity = "HIGH tail risk — significant downside exposure in stress events"
+    elif cvar_pct < -2.0:
+        severity = "MODERATE tail risk — above-average loss in adverse scenarios"
+    else:
+        severity = "MANAGEABLE tail risk — within typical emerging-market bounds"
+
+    return {
+        "var":            var_pct,
+        "cvar":           cvar_pct,
+        "confidence":     confidence,
+        "tail_obs":       int(len(tail)),
+        "interpretation": (
+            f"VaR({int(confidence*100)}%) = {var_pct}% | "
+            f"CVaR({int(confidence*100)}%) = {cvar_pct}% | {severity}"
+        ),
+    }
+
+
+def compute_higher_moments(returns: pd.Series) -> Dict[str, Any]:
+    """
+    Compute skewness and excess kurtosis of the return distribution.
+
+    PSX returns are empirically non-normal — negatively skewed (left tail)
+    and leptokurtic (fat tails).  These moments quantify *how* non-normal
+    the distribution is, informing position-sizing and stop-loss discipline.
+
+    Args:
+        returns: pandas Series of daily returns.  NaN values dropped.
+
+    Returns:
+        Dict with:
+            ``skewness``        — Fisher skewness (< 0 = negative skew = left tail)
+            ``excess_kurtosis`` — Fisher excess kurtosis (> 0 = fat tails; Normal = 0)
+            ``jarque_bera_stat``— JB test statistic (large value = non-normal)
+            ``is_non_normal``   — True if JB > 5.99 (χ² 2-df, p < 0.05)
+            ``interpretation``  — Plain-English narrative
+    """
+    r = returns.dropna()
+    if len(r) < 30:
+        return {
+            "skewness": None, "excess_kurtosis": None,
+            "jarque_bera_stat": None, "is_non_normal": None,
+            "interpretation": "Insufficient data (< 30 observations)"
+        }
+
+    skew = float(r.skew())          # pandas uses Fisher (normal = 0)
+    kurt = float(r.kurt())          # pandas uses excess kurtosis (normal = 0)
+    n    = len(r)
+
+    # Jarque-Bera statistic
+    jb = (n / 6) * (skew ** 2 + (kurt ** 2) / 4)
+    is_non_normal = bool(jb > 5.99)  # χ²(2) critical at α=0.05
+
+    # Skewness narrative
+    if skew < -0.5:
+        skew_note = f"Negative skew ({skew:.3f}) — distribution has a fat LEFT tail; large losses more likely than gains of equal magnitude"
+    elif skew > 0.5:
+        skew_note = f"Positive skew ({skew:.3f}) — distribution has a fat RIGHT tail; occasional large gains"
+    else:
+        skew_note = f"Near-symmetric ({skew:.3f}) — balanced left/right tail risk"
+
+    # Kurtosis narrative
+    if kurt > 3.0:
+        kurt_note = f"Highly leptokurtic ({kurt:.3f}) — extreme events far more frequent than Gaussian"
+    elif kurt > 1.0:
+        kurt_note = f"Leptokurtic ({kurt:.3f}) — heavier tails than normal distribution"
+    else:
+        kurt_note = f"Near-normal kurtosis ({kurt:.3f})"
+
+    return {
+        "skewness":          round(skew, 4),
+        "excess_kurtosis":   round(kurt, 4),
+        "jarque_bera_stat":  round(jb, 3),
+        "is_non_normal":     is_non_normal,
+        "interpretation":    f"{skew_note} | {kurt_note}",
+    }
+
+
+def compute_ledoit_wolf_shrinkage(
+    returns_df: pd.DataFrame,
+) -> Dict[str, Any]:
+    """
+    Compute the Ledoit-Wolf optimal linear shrinkage covariance matrix.
+
+    The standard sample covariance matrix S is severely noisy in small
+    samples (T << N problem). Ledoit-Wolf (2004) shrinks S toward a
+    structured target F with analytically optimal intensity δ:
+
+        Σ_shrunk = δ * F + (1 - δ) * S
+
+    Uses `sklearn.covariance.LedoitWolf` — no cross-validation required.
+
+    Args:
+        returns_df: DataFrame with shape [T × N] where T = days,
+                    N = assets.  Typically columns are
+                    [``stock_returns``, ``index_returns``].
+
+    Returns:
+        Dict with:
+            ``shrinkage_coefficient`` — δ (0 = pure sample cov, 1 = pure target)
+            ``cov_matrix``            — Shrunk covariance matrix as nested list
+            ``asset_names``           — Column names used
+            ``interpretation``        — Plain-English narrative
+    """
+    try:
+        from sklearn.covariance import LedoitWolf
+    except ImportError:
+        return {"error": "scikit-learn not installed. Run: pip install scikit-learn>=1.3"}
+
+    df = returns_df.dropna()
+    if len(df) < 30:
+        return {
+            "shrinkage_coefficient": None, "cov_matrix": None,
+            "interpretation": "Insufficient data for shrinkage estimation"
+        }
+
+    lw = LedoitWolf().fit(df.values)
+    delta = float(lw.shrinkage_)
+    cov   = lw.covariance_.tolist()
+
+    if delta > 0.5:
+        note = f"High shrinkage (δ={delta:.3f}) — sample is noisy; structured prior dominates. Treat raw correlations with caution."
+    elif delta > 0.2:
+        note = f"Moderate shrinkage (δ={delta:.3f}) — balanced blend of sample data and prior."
+    else:
+        note = f"Low shrinkage (δ={delta:.3f}) — sample covariance is reliable; ample data available."
+
+    return {
+        "shrinkage_coefficient": round(delta, 4),
+        "cov_matrix":            cov,
+        "asset_names":           list(df.columns),
+        "interpretation":        note,
+    }
+
+
+def black_litterman_expected_returns(
+    cov_matrix:     np.ndarray,
+    market_weights: np.ndarray,
+    views_Q:        np.ndarray,
+    views_P:        np.ndarray,
+    tau:            float = None,
+    risk_aversion:  float = 2.5,
+) -> Dict[str, Any]:
+    """
+    Black-Litterman (1990) posterior expected return vector.
+
+    BL combines market equilibrium returns (reverse-engineered from
+    market-cap weights via the CAPM) with absolute/relative investor views
+    to produce posterior estimates that remain mean-variance optimal.
+
+    Master formula (He & Litterman, 1999 variant):
+
+        Π  = δ * Σ * w_mkt          (implied equilibrium)
+        μ_BL = [(τΣ)⁻¹ + P'Ω⁻¹P]⁻¹  *  [(τΣ)⁻¹Π + P'Ω⁻¹Q]
+
+    Ω is assumed proportional to τ * P * Σ * P' (uncertainty of views
+    is proportional to variance in the direction of each view).
+
+    Args:
+        cov_matrix:     [N × N] numpy covariance matrix (use Ledoit-Wolf
+                        output for robustness).
+        market_weights: [N] vector of market-cap weights summing to 1.
+        views_Q:        [K] vector of view expected returns (annualised).
+                        E.g. ``[0.15]`` for a single +15% view.
+        views_P:        [K × N] pick matrix.  Each row identifies the
+                        assets the view applies to (+1 long, -1 short,
+                        0 neutral).
+        tau:            Uncertainty scalar (default = 1 / T ≈ 0.004 for 252
+                        trading days).
+        risk_aversion:  δ — market risk-aversion coefficient (typical 2–3).
+
+    Returns:
+        Dict with:
+            ``implied_equilibrium_mu``  — Π (pre-view returns)
+            ``posterior_mu``            — BL posterior expected returns
+            ``posterior_weights``       — MV optimal weights from BL mu
+            ``n_views``                 — Number of views incorporated
+            ``interpretation``          — Plain-English narrative
+    """
+    N = cov_matrix.shape[0]
+    Sigma = np.array(cov_matrix, dtype=float)
+    w     = np.array(market_weights, dtype=float)
+    Q     = np.array(views_Q, dtype=float)
+    P     = np.array(views_P, dtype=float).reshape(-1, N)
+    K     = P.shape[0]
+
+    if tau is None:
+        tau = 1.0 / 252  # standard choice
+
+    # ── Implied equilibrium returns (reverse CAPM) ───────────────
+    pi = risk_aversion * Sigma @ w   # shape [N]
+
+    # ── View uncertainty: Ω = τ * P * Σ * P' ────────────────────
+    omega = tau * P @ Sigma @ P.T   # shape [K × K]
+    omega_inv = np.linalg.inv(omega + np.eye(K) * 1e-8)  # numerical safety
+
+    # ── BL master formula ────────────────────────────────────────
+    tau_sigma_inv = np.linalg.inv(tau * Sigma + np.eye(N) * 1e-8)
+
+    A = tau_sigma_inv + P.T @ omega_inv @ P
+    b = tau_sigma_inv @ pi + P.T @ omega_inv @ Q
+
+    mu_bl = np.linalg.solve(A + np.eye(N) * 1e-8, b)  # shape [N]
+
+    # ── Posterior optimal weights (unconstrained MV) ─────────────
+    try:
+        sigma_bl = np.linalg.inv(tau_sigma_inv + P.T @ omega_inv @ P)
+        w_bl = np.linalg.solve(
+            risk_aversion * Sigma + np.eye(N) * 1e-8,
+            mu_bl
+        )
+        # Normalise to sum-to-one
+        w_bl = w_bl / (np.sum(np.abs(w_bl)) + 1e-10)
+    except np.linalg.LinAlgError:
+        w_bl = np.full(N, np.nan)
+
+    # ── Narrative ────────────────────────────────────────────────
+    view_impact = float(np.mean(np.abs(mu_bl - pi)))
+    if view_impact > 0.05:
+        note = f"Views substantially shift equilibrium returns by avg {view_impact*100:.2f}% (strong view conviction)"
+    elif view_impact > 0.01:
+        note = f"Views moderately adjust equilibrium by avg {view_impact*100:.2f}%"
+    else:
+        note = f"Views minimally affect equilibrium (avg Δ={view_impact*100:.3f}%)"
+
+    return {
+        "implied_equilibrium_mu":  [round(float(x), 6) for x in pi],
+        "posterior_mu":            [round(float(x), 6) for x in mu_bl],
+        "posterior_weights":       [round(float(x), 4) for x in w_bl],
+        "n_views":                 int(K),
+        "tau":                     round(tau, 6),
+        "risk_aversion":           risk_aversion,
+        "interpretation":          note,
+    }
+
+
+def adler_dumas_fx_exposure(
+    stock_returns:  pd.Series,
+    market_returns: pd.Series,
+    fx_returns:     pd.Series,
+) -> Dict[str, Any]:
+    """
+    Estimate Adler-Dumas (1984) FX currency exposure (Gamma) via OLS.
+
+    Regresses daily stock returns on two factors:
+        r_stock(t) = α + β * r_mkt(t) + γ * r_FX(t) + ε(t)
+
+    where r_FX is the daily PKR/USD log-return (from ``PKR=X`` ticker).
+
+    γ (Gamma) is the **currency exposure coefficient**:
+        > 0 → stock benefits from PKR depreciation (typical: exporters,
+              commodities, USD-earning companies like OGDC, LUCK)
+        < 0 → stock hurt by PKR depreciation (importers, utility with
+              USD-linked CAPEX, or domestic consumer staples)
+        ≈ 0 → currency neutral
+
+    Args:
+        stock_returns:  Daily returns of the PSX stock.
+        market_returns: Daily KSE-100 index returns.
+        fx_returns:     Daily PKR/USD returns (positive = PKR depr.).
+
+    Returns:
+        Dict with:
+            ``alpha``            — Intercept (stock's excess return unexplained by market/FX)
+            ``beta_market``      — Systematic market beta (same as standard CAPM beta)
+            ``gamma_fx``         — Currency exposure coefficient (Adler-Dumas Gamma)
+            ``r_squared``        — Regression R² (proportion of variance explained)
+            ``residual_std``     — Standard deviation of regression residuals
+            ``n_observations``   — Number of data points used
+            ``interpretation``   — Plain-English narrative of currency exposure
+    """
+    # Align all three series by their intersection of dates
+    combined = pd.DataFrame({
+        "stock":  stock_returns,
+        "market": market_returns,
+        "fx":     fx_returns,
+    }).dropna()
+
+    n = len(combined)
+    if n < 60:
+        return {
+            "alpha": None, "beta_market": None, "gamma_fx": None,
+            "r_squared": None, "residual_std": None, "n_observations": n,
+            "interpretation": f"Insufficient overlapping observations ({n}) for FX exposure regression (min 60 required)"
+        }
+
+    y = combined["stock"].values
+    X = np.column_stack([
+        np.ones(n),              # intercept
+        combined["market"].values,
+        combined["fx"].values,
+    ])
+
+    # OLS via normal equations: β = (X'X)⁻¹ X'y
+    try:
+        coeffs, residuals, rank, sv = np.linalg.lstsq(X, y, rcond=None)
+    except np.linalg.LinAlgError as e:
+        return {"error": f"OLS failed: {e}"}
+
+    alpha_val  = float(coeffs[0])
+    beta_val   = float(coeffs[1])
+    gamma_val  = float(coeffs[2])
+
+    # R² calculation
+    y_hat    = X @ coeffs
+    ss_res   = float(np.sum((y - y_hat) ** 2))
+    ss_tot   = float(np.sum((y - y.mean()) ** 2))
+    r2       = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    res_std  = float(np.std(y - y_hat))
+
+    # ── Gamma interpretation ──────────────────────────────────────
+    if gamma_val > 0.3:
+        fx_note = (
+            f"POSITIVE FX exposure (γ={gamma_val:.3f}) — stock is an implicit "
+            f"USD-earner or commodity-linked; BENEFITS from PKR depreciation"
+        )
+    elif gamma_val > 0.05:
+        fx_note = (
+            f"Mild positive FX exposure (γ={gamma_val:.3f}) — slight benefit "
+            f"from PKR weakness; possibly partial USD revenue"
+        )
+    elif gamma_val < -0.3:
+        fx_note = (
+            f"NEGATIVE FX exposure (γ={gamma_val:.3f}) — stock is an importer "
+            f"or has significant USD costs; HURT by PKR depreciation"
+        )
+    elif gamma_val < -0.05:
+        fx_note = (
+            f"Mild negative FX exposure (γ={gamma_val:.3f}) — slight drag "
+            f"from PKR weakness; possibly partial USD costs"
+        )
+    else:
+        fx_note = (
+            f"Currency neutral (γ={gamma_val:.3f}) — minimal sensitivity to "
+            f"PKR/USD moves; predominantly domestic revenue and costs"
+        )
+
+    return {
+        "alpha":           round(alpha_val * 100, 4),   # as %
+        "beta_market":     round(beta_val, 4),
+        "gamma_fx":        round(gamma_val, 4),
+        "r_squared":       round(r2, 4),
+        "residual_std":    round(res_std * 100, 4),     # as %
+        "n_observations":  n,
+        "interpretation":  fx_note,
+    }
+
+
+def compute_advanced_risk_suite(
+    df:          pd.DataFrame,
+    index_df:    Optional[pd.DataFrame] = None,
+    fx_df:       Optional[pd.DataFrame] = None,
+    bl_views_Q:  Optional[List[float]] = None,
+    bl_views_P:  Optional[List[List[float]]] = None,
+    confidence:  float = 0.95,
+) -> Dict[str, Any]:
+    """
+    Master entry point — compute the full Advanced Quantitative Risk Suite.
+
+    Calls all five advanced risk models and returns their outputs in a
+    single dict, ready to be consumed by the Risk Analyst agent.
+
+    Args:
+        df:          Stock OHLCV DataFrame (output of ``get_history``).
+        index_df:    KSE-100 index OHLCV DataFrame (optional; used for
+                     beta, Ledoit-Wolf, Adler-Dumas, Black-Litterman).
+        fx_df:       USD/PKR (``PKR=X``) OHLCV DataFrame (optional; used
+                     for Adler-Dumas FX exposure).
+        bl_views_Q:  Black-Litterman view returns (annualised floats).
+                     If None, a neutral view of 0 is applied.
+        bl_views_P:  Black-Litterman pick matrix rows.
+                     If None, a single absolute view on the stock is used.
+        confidence:  CVaR confidence level (default 0.95).
+
+    Returns:
+        Dict with keys:
+            ``cvar``            — CVaR / Expected Shortfall result
+            ``higher_moments``  — Skewness & Kurtosis result
+            ``ledoit_wolf``     — Covariance shrinkage result
+            ``black_litterman`` — BL posterior returns result
+            ``adler_dumas``     — FX exposure result
+    """
+    result: Dict[str, Any] = {}
+
+    if df is None or df.empty or len(df) < 30:
+        return {"error": "Insufficient data for advanced risk computation"}
+
+    stock_close   = df["Close"]
+    stock_returns = stock_close.pct_change().dropna()
+
+    # ── 1. CVaR ──────────────────────────────────────────────────
+    result["cvar"] = compute_cvar(stock_returns, confidence=confidence)
+
+    # ── 2. Higher-Order Moments ──────────────────────────────────
+    result["higher_moments"] = compute_higher_moments(stock_returns)
+
+    # ── 3 & 4 & 5: Need index returns ────────────────────────────
+    if index_df is not None and not index_df.empty:
+        index_close   = index_df["Close"]
+        index_returns = index_close.pct_change().dropna()
+
+        # ── 3. Ledoit-Wolf Shrinkage ──────────────────────────────
+        aligned = pd.DataFrame({
+            "stock_returns": stock_returns,
+            "index_returns": index_returns,
+        }).dropna()
+
+        if len(aligned) >= 30:
+            result["ledoit_wolf"] = compute_ledoit_wolf_shrinkage(aligned)
+
+            # ── 4. Black-Litterman (2-asset: stock + index) ───────
+            try:
+                cov_list = result["ledoit_wolf"].get("cov_matrix")
+                if cov_list is not None:
+                    cov_np = np.array(cov_list)
+
+                    # Market weights: approximate equal-weight [0.5, 0.5]
+                    # if individual stock market-cap weight unknown
+                    w_mkt = np.array([0.5, 0.5])
+
+                    # Default to a single neutral view (view = 0%)
+                    if bl_views_Q is None or bl_views_P is None:
+                        Q = np.array([0.0])
+                        P = np.array([[1.0, 0.0]])  # view on stock
+                    else:
+                        Q = np.array(bl_views_Q, dtype=float)
+                        P = np.array(bl_views_P, dtype=float)
+
+                    result["black_litterman"] = black_litterman_expected_returns(
+                        cov_matrix=cov_np,
+                        market_weights=w_mkt,
+                        views_Q=Q,
+                        views_P=P,
+                    )
+            except Exception as bl_exc:
+                logger.warning("Black-Litterman computation failed: %s", bl_exc)
+                result["black_litterman"] = {"error": str(bl_exc)}
+
+        else:
+            result["ledoit_wolf"]     = {"interpretation": "Insufficient overlapping data for shrinkage"}
+            result["black_litterman"] = {"interpretation": "Insufficient overlapping data for Black-Litterman"}
+
+        # ── 5. Adler-Dumas FX Exposure ────────────────────────────
+        if fx_df is not None and not fx_df.empty:
+            fx_close   = fx_df["Close"]
+            fx_returns = fx_close.pct_change().dropna()
+            result["adler_dumas"] = adler_dumas_fx_exposure(
+                stock_returns=stock_returns,
+                market_returns=index_returns,
+                fx_returns=fx_returns,
+            )
+        else:
+            result["adler_dumas"] = {"interpretation": "PKR/USD FX data unavailable — currency exposure not computed"}
+
+    else:
+        result["ledoit_wolf"]     = {"interpretation": "KSE-100 index data unavailable — shrinkage not computed"}
+        result["black_litterman"] = {"interpretation": "KSE-100 index data unavailable — Black-Litterman not computed"}
+        result["adler_dumas"]     = {"interpretation": "KSE-100 index data unavailable — FX exposure not computed"}
+
+    return result
+

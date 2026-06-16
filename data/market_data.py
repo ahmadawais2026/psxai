@@ -1,10 +1,10 @@
 """
 data/market_data.py
 ═══════════════════════════════════════════════════════════════════════
-yfinance wrapper for Pakistan Stock Exchange (PSX) equities.
+AskAnalyst and REST-based data retrieval for Pakistan Stock Exchange (PSX) equities.
 
 Every public function transparently:
-  1.  Appends the ``.KA`` suffix required by Yahoo Finance.
+  1.  Handles local PSX tickers and AskAnalyst company mapping.
   2.  Checks the SQLite cache (data/cache.py) before hitting the
       network.
   3.  Returns structured dicts / DataFrames ready for consumption by
@@ -27,9 +27,9 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import requests
-import yfinance as yf
+# No yfinance import - migrated to AskAnalyst and Yahoo REST APIs.
 
-# Create a requests session with a default timeout to prevent yfinance/network hangs
+# Create a requests session with a default timeout to prevent network hangs
 class TimeoutHTTPAdapter(requests.adapters.HTTPAdapter):
     def __init__(self, *args, **kwargs):
         self.timeout = kwargs.pop("timeout", 5)
@@ -86,10 +86,34 @@ def _local_symbol(symbol: str) -> str:
     return symbol.strip().upper().replace(PSX_SUFFIX, "")
 
 
+def _get_askanalyst_id(symbol: str) -> Optional[int]:
+    """Resolve the AskAnalyst company ID using the local PSX_TICKERS database."""
+    from data.psx_tickers import PSX_TICKERS
+    local = _local_symbol(symbol)
+    if local in PSX_TICKERS:
+        return PSX_TICKERS[local].get("askanalyst_id")
+    return None
+
+
+def _fetch_yahoo_chart_rest(ticker: str, range_str: str = "1mo", interval_str: str = "1d") -> Optional[Dict[str, Any]]:
+    """Fetch raw chart JSON from Yahoo Finance REST API directly."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    params = {"range": range_str, "interval": interval_str}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=8)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        logger.warning(f"Yahoo chart REST fetch failed for {ticker}: {e}")
+    return None
+
+
 def _safe_get(info: dict, key: str, default: Any = None) -> Any:
-    """Safely extract a key from yfinance info dict."""
+    """Safely extract a key from a dictionary."""
     val = info.get(key, default)
-    # yfinance sometimes returns 'None' as a string
     if val is None or val == "None":
         return default
     return val
@@ -101,10 +125,10 @@ def _get_clean_name(local: str, info: dict) -> str:
     if local in PSX_TICKERS:
         return PSX_TICKERS[local].get("name", local)
     
-    yf_name = _safe_get(info, "longName", _safe_get(info, "shortName", local))
-    if "," in yf_name and (".KA" in yf_name or local in yf_name):
-        return yf_name.split(",")[0].replace(".KA", "").strip()
-    return yf_name
+    ask_name = _safe_get(info, "name", _safe_get(info, "label", local))
+    if "," in ask_name and (".KA" in ask_name or local in ask_name):
+        return ask_name.split(",")[0].replace(".KA", "").strip()
+    return ask_name
 
 
 def _parse_period_key(key: str) -> Optional[Any]:
@@ -273,62 +297,90 @@ def get_quote(symbol: str) -> Dict[str, Any]:
         except Exception as exc:
             logger.warning("PSX Portal fetch failed for %s: %s", local, exc)
 
-        # 3. Fallback to full yfinance history/info overlay if PSX Portal fetch failed or was empty
+        # 3. Fallback to AskAnalyst and Yahoo REST if PSX Portal fetch failed or was empty
         if psx_quote is not None:
             quote = psx_quote
         else:
-            try:
-                ticker = yf.Ticker(_yahoo_symbol(symbol))
-                info = ticker.info or {}
-                hist = ticker.history(period="5d", timeout=5)
-            except Exception as exc:
-                logger.warning("yfinance fallback fetch failed for %s: %s", local, exc)
-                info = {}
-                hist = pd.DataFrame()
-
-            if hist.empty and (not info or info.get("regularMarketPrice") is None):
-                return {"symbol": local, "error": f"No data found for {local} on yfinance or PSX Portal"}
-
-            if not hist.empty:
-                price = float(hist["Close"].iloc[-1])
-                open_val = float(hist["Open"].iloc[-1])
-                high_val = float(hist["High"].iloc[-1])
-                low_val = float(hist["Low"].iloc[-1])
-                volume = int(hist["Volume"].iloc[-1])
+            ask_id = _get_askanalyst_id(local)
+            quote_raw = None
+            if ask_id:
+                try:
+                    url = f"https://api.askanalyst.com.pk/api/sharepricedatanew/{ask_id}"
+                    r_ask = requests.get(url, timeout=8)
+                    if r_ask.status_code == 200:
+                        quote_raw = r_ask.json()
+                except Exception as e:
+                    logger.warning("AskAnalyst fallback quote fetch failed for %s: %s", local, e)
+            
+            if quote_raw and isinstance(quote_raw, dict):
+                price = float(quote_raw.get("current") or quote_raw.get("close") or 0.0)
+                open_val = float(quote_raw.get("open") or 0.0)
+                high_val = float(quote_raw.get("high") or 0.0)
+                low_val = float(quote_raw.get("low") or 0.0)
+                volume = int(float(quote_raw.get("volume") or 0.0))
+                prev_close = float(quote_raw.get("ldcp") or 0.0)
+                change = float(quote_raw.get("change") or 0.0)
+                change_percent = float(quote_raw.get("change_in_percentage") or 0.0)
+                market_cap = float(quote_raw.get("market_cap") or 0.0) * 1_000_000
                 
-                if len(hist) >= 2:
-                    prev_close = float(hist["Close"].iloc[-2])
-                else:
-                    prev_close = float(_safe_get(info, "regularMarketPreviousClose", price))
-                    
-                change = price - prev_close
-                change_percent = (change / prev_close) * 100 if prev_close != 0.0 else 0.0
+                quote = {
+                    "symbol":                local,
+                    "name":                  _get_clean_name(local, quote_raw),
+                    "price":                 price,
+                    "change":               change,
+                    "change_percent":       change_percent,
+                    "volume":               volume,
+                    "market_cap":           market_cap,
+                    "day_high":             high_val,
+                    "day_low":              low_val,
+                    "open":                 open_val,
+                    "previous_close":       prev_close,
+                    "fifty_two_week_high":  float(quote_raw.get("fifty_two_week_high") or 0.0),
+                    "fifty_two_week_low":   float(quote_raw.get("fifty_two_week_low") or 0.0),
+                    "currency":             "PKR",
+                }
             else:
-                price = _safe_get(info, "regularMarketPrice", 0)
-                open_val = _safe_get(info, "regularMarketOpen", 0)
-                high_val = _safe_get(info, "regularMarketDayHigh", 0)
-                low_val = _safe_get(info, "regularMarketDayLow", 0)
-                volume = _safe_get(info, "regularMarketVolume", 0)
-                prev_close = _safe_get(info, "regularMarketPreviousClose", price)
-                change = _safe_get(info, "regularMarketChange", 0)
-                change_percent = _safe_get(info, "regularMarketChangePercent", 0)
-
-            quote = {
-                "symbol":                local,
-                "name":                  _get_clean_name(local, info),
-                "price":                 price,
-                "change":               change,
-                "change_percent":       change_percent,
-                "volume":               volume,
-                "market_cap":           _safe_get(info, "marketCap", 0),
-                "day_high":             high_val,
-                "day_low":              low_val,
-                "open":                 open_val,
-                "previous_close":       prev_close,
-                "fifty_two_week_high":  _safe_get(info, "fiftyTwoWeekHigh", 0),
-                "fifty_two_week_low":   _safe_get(info, "fiftyTwoWeekLow", 0),
-                "currency":             _safe_get(info, "currency", "PKR"),
-            }
+                try:
+                    res = _fetch_yahoo_chart_rest(_yahoo_symbol(symbol), range_str="5d")
+                    if res and "chart" in res and res["chart"].get("result"):
+                        result = res["chart"]["result"][0]
+                        meta = result.get("meta", {})
+                        indicators = result.get("indicators", {}).get("quote", [{}])[0]
+                        closes = [c for c in indicators.get("close", []) if c is not None]
+                        opens = [o for o in indicators.get("open", []) if o is not None]
+                        highs = [h for h in indicators.get("high", []) if h is not None]
+                        lows = [l for l in indicators.get("low", []) if l is not None]
+                        volumes = [v for v in indicators.get("volume", []) if v is not None]
+                        
+                        price = closes[-1] if closes else meta.get("regularMarketPrice", 0.0)
+                        open_val = opens[-1] if opens else meta.get("regularMarketOpen", 0.0)
+                        high_val = highs[-1] if highs else price
+                        low_val = lows[-1] if lows else price
+                        volume = int(volumes[-1]) if volumes else 0
+                        prev_close = closes[-2] if len(closes) >= 2 else meta.get("previousClose", price)
+                        change = price - prev_close
+                        change_percent = (change / prev_close) * 100 if prev_close != 0.0 else 0.0
+                        
+                        quote = {
+                            "symbol":                local,
+                            "name":                  _get_clean_name(local, {}),
+                            "price":                 price,
+                            "change":               change,
+                            "change_percent":       change_percent,
+                            "volume":               volume,
+                            "market_cap":           meta.get("marketCap", 0),
+                            "day_high":             high_val,
+                            "day_low":              low_val,
+                            "open":                 open_val,
+                            "previous_close":       prev_close,
+                            "fifty_two_week_high":  0.0,
+                            "fifty_two_week_low":   0.0,
+                            "currency":             meta.get("currency", "PKR"),
+                        }
+                    else:
+                        return {"symbol": local, "error": f"No data found for {local} on PSX Portal, AskAnalyst, or Yahoo REST"}
+                except Exception as exc:
+                    return {"symbol": local, "error": f"Failed to fetch quote via Yahoo REST fallback: {exc}"}
 
         set_cached(cache_key, quote)
         return quote
@@ -412,27 +464,47 @@ def get_history(
                         if df.index.tz is not None:
                             df.index = df.index.tz_localize(None)
                         return df
-                logger.info("PSX EOD history empty or insufficient for %s, trying yfinance", local)
+                logger.info("PSX EOD history empty or insufficient for %s, trying Yahoo REST fallback", local)
             except Exception as p_exc:
-                logger.warning("PSX EOD history failed for %s: %s, trying yfinance", local, p_exc)
+                logger.warning("PSX EOD history failed for %s: %s, trying Yahoo REST fallback", local, p_exc)
 
-        # Fallback to yfinance
-        ticker = yf.Ticker(_yahoo_symbol(symbol))
-        df: pd.DataFrame = ticker.history(period=period, interval=interval, timeout=5)
-
-        if df.empty:
+        # Fallback to Yahoo REST API
+        res = _fetch_yahoo_chart_rest(_yahoo_symbol(symbol), range_str=period, interval_str=interval)
+        if not res or not res.get("chart", {}).get("result"):
             logger.warning("No history data for %s (period=%s, interval=%s)", local, period, interval)
             return pd.DataFrame()
 
-        # Normalise column names (yfinance can vary)
-        df = df.rename(columns={
-            "Stock Splits": "Stock_Splits",
-            "Capital Gains": "Capital_Gains",
-        })
-
-        # Keep only OHLCV columns
-        keep_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
-        df = df[keep_cols]
+        result = res["chart"]["result"][0]
+        timestamps = result.get("timestamp", [])
+        quote_indicators = result.get("indicators", {}).get("quote", [{}])[0]
+        
+        opens = quote_indicators.get("open", [])
+        highs = quote_indicators.get("high", [])
+        lows = quote_indicators.get("low", [])
+        closes = quote_indicators.get("close", [])
+        volumes = quote_indicators.get("volume", [])
+        
+        # Build pandas DataFrame
+        records = []
+        import datetime
+        for i, ts in enumerate(timestamps):
+            if i < len(closes) and closes[i] is not None:
+                dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+                records.append({
+                    "Date": dt,
+                    "Open": float(opens[i]) if i < len(opens) and opens[i] is not None else float(closes[i]),
+                    "High": float(highs[i]) if i < len(highs) and highs[i] is not None else float(closes[i]),
+                    "Low": float(lows[i]) if i < len(lows) and lows[i] is not None else float(closes[i]),
+                    "Close": float(closes[i]),
+                    "Volume": float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0
+                })
+                
+        if not records:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(records)
+        df.set_index("Date", inplace=True)
+        df.sort_index(inplace=True)
 
         # Cache as serialisable records
         df_reset = df.reset_index()
@@ -501,12 +573,15 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 total_liabilities = highlights.get("total_liabilities", 0.0)
                 equity = total_assets - total_liabilities
                 
-                # Retrieve shares outstanding from yfinance info if possible
+                # Retrieve shares outstanding from AskAnalyst if possible
                 shares_outstanding = None
                 try:
-                    ticker = yf.Ticker(_yahoo_symbol(symbol))
-                    info = ticker.info or {}
-                    shares_outstanding = _safe_get(info, "sharesOutstanding")
+                    ask_id = _get_askanalyst_id(symbol)
+                    if ask_id:
+                        r_ask = requests.get(f"https://api.askanalyst.com.pk/api/sharepricedatanew/{ask_id}", timeout=5)
+                        if r_ask.status_code == 200:
+                            quote_raw = r_ask.json()
+                            shares_outstanding = float(quote_raw.get("shares") or 0.0)
                 except:
                     pass
                 
@@ -541,14 +616,12 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                     "currency":             "PKR",
                 }
                 
-                # Merge with yfinance info for missing meta (like name, sector)
+                # Merge with AskAnalyst / local metadata for missing name, sector
                 try:
-                    ticker = yf.Ticker(_yahoo_symbol(symbol))
-                    info = ticker.info or {}
-                    fundamentals["name"] = _safe_get(info, "longName", _safe_get(info, "shortName", local))
-                    fundamentals["sector"] = _safe_get(info, "sector", "N/A")
-                    fundamentals["industry"] = _safe_get(info, "industry", "N/A")
-                    fundamentals["beta"] = _safe_get(info, "beta")
+                    from data.psx_tickers import PSX_TICKERS
+                    if local in PSX_TICKERS:
+                        fundamentals["name"] = PSX_TICKERS[local].get("name", local)
+                        fundamentals["sector"] = PSX_TICKERS[local].get("sector", "N/A")
                 except:
                     pass
                     
@@ -557,63 +630,72 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("Error fetching fundamentals from Firestore for %s: %s", local, e)
 
-    # 2. Fallback to yfinance
+    # 2. Fallback to AskAnalyst / Yahoo REST
     try:
-        ticker = yf.Ticker(_yahoo_symbol(symbol))
-        info = ticker.info or {}
-
-        if not info:
-            return {"symbol": local, "error": f"No fundamental data for {local}"}
-
-        fundamentals: Dict[str, Any] = {
-            "symbol":               local,
-            "name":                 _safe_get(info, "longName", _safe_get(info, "shortName", local)),
-            "sector":               _safe_get(info, "sector", "N/A"),
-            "industry":             _safe_get(info, "industry", "N/A"),
-            # Valuation
-            "pe_ratio":             _safe_get(info, "trailingPE"),
-            "forward_pe":           _safe_get(info, "forwardPE"),
-            "pb_ratio":             _safe_get(info, "priceToBook"),
-            "ps_ratio":             _safe_get(info, "priceToSalesTrailing12Months"),
-            "peg_ratio":            _safe_get(info, "pegRatio"),
-            "enterprise_value":     _safe_get(info, "enterpriseValue"),
-            "ev_to_ebitda":         _safe_get(info, "enterpriseToEbitda"),
-            # Profitability
-            "eps":                  _safe_get(info, "trailingEps"),
-            "forward_eps":          _safe_get(info, "forwardEps"),
-            "roe":                  _safe_get(info, "returnOnEquity"),
-            "roa":                  _safe_get(info, "returnOnAssets"),
-            "profit_margin":        _safe_get(info, "profitMargins"),
-            "operating_margin":     _safe_get(info, "operatingMargins"),
-            # Dividend
-            "dividend_yield":       _safe_get(info, "dividendYield"),
-            "dividend_rate":        _safe_get(info, "dividendRate"),
-            "payout_ratio":         _safe_get(info, "payoutRatio"),
-            # Balance Sheet
-            "debt_to_equity":       _safe_get(info, "debtToEquity"),
-            "current_ratio":        _safe_get(info, "currentRatio"),
-            "book_value":           _safe_get(info, "bookValue"),
-            "total_debt":           _safe_get(info, "totalDebt"),
-            "total_cash":           _safe_get(info, "totalCash"),
-            # Income
-            "revenue":              _safe_get(info, "totalRevenue"),
-            "revenue_growth":       _safe_get(info, "revenueGrowth"),
-            "earnings_growth":      _safe_get(info, "earningsGrowth"),
-            "net_income":           _safe_get(info, "netIncomeToCommon"),
-            "ebitda":               _safe_get(info, "ebitda"),
-            "free_cash_flow":       _safe_get(info, "freeCashflow"),
-            # Risk
-            "beta":                 _safe_get(info, "beta"),
-            # Shares
-            "shares_outstanding":   _safe_get(info, "sharesOutstanding"),
-            "float_shares":         _safe_get(info, "floatShares"),
-            "market_cap":           _safe_get(info, "marketCap"),
-            "currency":             _safe_get(info, "currency", "PKR"),
-        }
-
-        set_cached(cache_key, fundamentals)
-        return fundamentals
-
+        ask_id = _get_askanalyst_id(symbol)
+        if ask_id:
+            r_ask = requests.get(f"https://api.askanalyst.com.pk/api/sharepricedatanew/{ask_id}", timeout=8)
+            if r_ask.status_code == 200:
+                info = r_ask.json()
+                from data.psx_tickers import PSX_TICKERS
+                name = PSX_TICKERS.get(local, {}).get("name", local)
+                sector = PSX_TICKERS.get(local, {}).get("sector", "N/A")
+                
+                pe_val = info.get("pe")
+                pb_val = info.get("pbv")
+                dy_val = info.get("dividend_yield")
+                
+                pe_ratio = float(pe_val) if pe_val and pe_val != "None" else None
+                pb_ratio = float(pb_val) if pb_val and pb_val != "None" else None
+                dividend_yield = float(dy_val) if dy_val and dy_val != "None" else None
+                
+                fundamentals = {
+                    "symbol":               local,
+                    "name":                 name,
+                    "sector":               sector,
+                    "industry":             "N/A",
+                    "pe_ratio":             pe_ratio,
+                    "pb_ratio":             pb_ratio,
+                    "dividend_yield":       dividend_yield,
+                    "eps":                  None,
+                    "roe":                  None,
+                    "book_value":           None,
+                    "shares_outstanding":   float(info.get("shares") or 0.0),
+                    "market_cap":           float(info.get("market_cap") or 0.0) * 1_000_000,
+                    "currency":             "PKR",
+                }
+                
+                quote = get_quote(symbol) or {}
+                price = quote.get("price", 0.0)
+                if price > 0:
+                    if pe_ratio and pe_ratio > 0:
+                        fundamentals["eps"] = price / pe_ratio
+                    if pb_ratio and pb_ratio > 0:
+                        fundamentals["book_value"] = price / pb_ratio
+                
+                set_cached(cache_key, fundamentals)
+                return fundamentals
+                
+        # Try Yahoo REST API secondary fallback
+        res = _fetch_yahoo_chart_rest(_yahoo_symbol(symbol), range_str="1d")
+        if res and "chart" in res and res["chart"].get("result"):
+            meta = res["chart"]["result"][0].get("meta", {})
+            fundamentals = {
+                "symbol":               local,
+                "name":                 local,
+                "sector":               "N/A",
+                "industry":             "N/A",
+                "pe_ratio":             None,
+                "pb_ratio":             None,
+                "dividend_yield":       None,
+                "shares_outstanding":   meta.get("sharesOutstanding"),
+                "market_cap":           meta.get("marketCap"),
+                "currency":             meta.get("currency", "PKR"),
+            }
+            set_cached(cache_key, fundamentals)
+            return fundamentals
+            
+        return {"symbol": local, "error": f"No fundamental data for {local} on AskAnalyst or Yahoo REST"}
     except Exception as exc:
         logger.error("Error fetching fundamentals for %s: %s", local, exc)
         return {"symbol": local, "error": str(exc)}
@@ -668,33 +750,53 @@ def get_financial_statements(symbol: str) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("Error fetching financial statements from Firestore for %s: %s", local, e)
 
-    # 2. Fallback to yfinance
-    def _df_to_dict(df: pd.DataFrame) -> Dict[str, Any]:
-        """Convert a yfinance statement DataFrame to a JSON-safe dict."""
-        if df is None or df.empty:
-            return {}
-        # Columns are dates, rows are line items
-        result: Dict[str, Any] = {}
-        for col in df.columns:
-            col_label = col.strftime("%Y-%m-%d") if hasattr(col, "strftime") else str(col)
-            result[col_label] = {}
-            for idx in df.index:
-                val = df.at[idx, col]
-                # Convert numpy types to native Python
-                if pd.notna(val):
-                    result[col_label][str(idx)] = float(val)
-        return result
-
+    # 2. Fallback to AskAnalyst
     try:
-        ticker = yf.Ticker(_yahoo_symbol(symbol))
-
-        statements: Dict[str, Any] = {
+        import sys
+        from pathlib import Path
+        base_dir = Path(__file__).resolve().parent.parent
+        if str(base_dir) not in sys.path:
+            sys.path.insert(0, str(base_dir))
+        from scrape_askanalyst import fetch_statement_data, fetch_cash_flow, parse_statement_json, parse_cash_flow_json
+        
+        ask_id = _get_askanalyst_id(symbol)
+        if not ask_id:
+            return {"symbol": local, "error": f"No AskAnalyst ID found for {local}"}
+            
+        is_raw = fetch_statement_data("iss", ask_id, "annual")
+        bs_raw = fetch_statement_data("bss", ask_id, "annual")
+        cf_raw = fetch_cash_flow(ask_id)
+        
+        def _parse_to_dict(raw_data, is_cf=False):
+            if not raw_data:
+                return {}
+            df = parse_cash_flow_json(raw_data) if is_cf else parse_statement_json(raw_data)
+            if df is None or df.empty:
+                return {}
+            res = {}
+            date_cols = [c for c in df.columns if c not in ["Metric", "Unit"]]
+            for col in date_cols:
+                res[str(col)] = {}
+                for _, row in df.iterrows():
+                    val = row[col]
+                    try:
+                        if pd.notna(val):
+                            res[str(col)][str(row["Metric"])] = float(val)
+                    except:
+                        pass
+            return res
+            
+        statements = {
             "symbol":           local,
-            "income_statement": _df_to_dict(ticker.income_stmt),
-            "balance_sheet":    _df_to_dict(ticker.balance_sheet),
-            "cash_flow":        _df_to_dict(ticker.cashflow),
+            "income_statement": _parse_to_dict(is_raw),
+            "balance_sheet":    _parse_to_dict(bs_raw),
+            "cash_flow":        _parse_to_dict(cf_raw, is_cf=True)
         }
-
+        
+        # Parse highlights
+        highlights = _parse_firestore_financials_to_highlights(statements, local)
+        statements.update(highlights)
+        
         set_cached(cache_key, statements)
         return statements
 

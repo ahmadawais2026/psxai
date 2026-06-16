@@ -78,9 +78,45 @@ class Orchestrator:
 
         def node_risk(state: FinancialConsensusState):
             logger.info(f"LangGraph: Running Risk Analyst for {state['symbol']}...")
-            # Use the general context (user_context is the general one here)
-            rep = self.risk_analyst.analyze(state["symbol"], portfolio_context=state["user_context"], context=state["agent_context"])
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+            NODE_TIMEOUT = 60  # seconds — safety net above the per-fetch 8s timeouts
+
+            def _run():
+                return self.risk_analyst.analyze(
+                    state["symbol"],
+                    portfolio_context=state["user_context"],
+                    context=state["agent_context"]
+                )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_run)
+                try:
+                    rep = future.result(timeout=NODE_TIMEOUT)
+                except FuturesTimeout:
+                    logger.error(f"Risk Analyst node timed out after {NODE_TIMEOUT}s for {state['symbol']} — returning fallback.")
+                    future.cancel()
+                    rep = {
+                        "error": True, "agent": "Risk Analyst", "symbol": state["symbol"],
+                        "risk_level": "unknown", "risk_score": 0,
+                        "risk_factors": [{"factor": "Timeout", "severity": "high", "detail": f"Risk analysis did not complete within {NODE_TIMEOUT}s"}],
+                        "volatility_assessment": "unavailable", "max_position_pct": 0.0,
+                        "stop_loss_pct": 0.0, "key_risks": ["Analysis timed out"],
+                        "mitigants": [], "confidence": 0,
+                        "summary": "Risk analysis timed out — treat position sizing conservatively.",
+                    }
+                except Exception as exc:
+                    logger.error(f"Risk Analyst node raised exception: {exc}")
+                    rep = {
+                        "error": True, "agent": "Risk Analyst", "symbol": state["symbol"],
+                        "risk_level": "unknown", "risk_score": 0,
+                        "risk_factors": [{"factor": "Exception", "severity": "high", "detail": str(exc)}],
+                        "volatility_assessment": "unavailable", "max_position_pct": 0.0,
+                        "stop_loss_pct": 0.0, "key_risks": [str(exc)],
+                        "mitigants": [], "confidence": 0,
+                        "summary": f"Risk analysis failed: {exc}",
+                    }
             return {"risk_report": rep}
+
 
         def node_debate(state: FinancialConsensusState):
             logger.info(f"LangGraph: Running Research Team Debate for {state['symbol']}...")

@@ -251,43 +251,8 @@ def fetch_share_price_quote(company_id):
 
 
 def fetch_cash_flow_fallback(ticker, period="annual"):
-    """Fallback to Yahoo Finance to fetch Cash Flow data if the primary API fails."""
-    import yfinance as yf
-    
-    # Map AskAnalyst tickers to Yahoo Finance symbols if they mismatch
-    symbol_map = {
-        "WAFI": "SHEL"
-    }
-    mapped_ticker = symbol_map.get(ticker.upper(), ticker.upper())
-    yf_symbol = f"{mapped_ticker}.KA"
-    
-    print(f"    [!] Attempting fallback to Yahoo Finance for {yf_symbol} ({period})...")
-    try:
-        stock = yf.Ticker(yf_symbol)
-        cf = stock.quarterly_cashflow if period == "quarter" else stock.cashflow
-        if cf is not None and not cf.empty:
-            # Reset index to make metrics a column
-            cf_df = cf.reset_index()
-            cf_df.rename(columns={cf_df.columns[0]: "Metric"}, inplace=True)
-            cf_df.insert(1, "Unit", "PKR (mn)")  # Default unit representation
-            
-            # Format and scale columns (Yahoo Finance reports raw numbers, we convert to Millions)
-            for col in list(cf_df.columns[2:]):
-                # Format header
-                if period == "quarter":
-                    date_str = str(col)[:7]  # e.g., '2025-09'
-                else:
-                    date_str = str(col).split("-")[0]  # e.g., '2025'
-                cf_df.rename(columns={col: date_str}, inplace=True)
-                
-                # Scale values to Millions and handle empty cells (do not use fillna("") to avoid casting to object/text)
-                cf_df[date_str] = pd.to_numeric(cf_df[date_str], errors='coerce') / 1_000_000
-                cf_df[date_str] = cf_df[date_str].round(2)
-                
-            print(f"    [OK] Successfully retrieved Cash Flow via Yahoo Finance fallback ({len(cf_df)} rows)")
-            return cf_df
-    except Exception as e:
-        print(f"    [-] Yahoo Finance fallback failed: {e}")
+    """Fallback to Yahoo Finance is disabled."""
+    print("    [-] Fallback to Yahoo Finance is disabled.")
     return None
 
 

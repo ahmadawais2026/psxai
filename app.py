@@ -375,7 +375,7 @@ def generate_report():
         symbol = data.get("symbol", "").upper()
         sector = data.get("sector", "")
 
-        # Fetch rich financial data from Firestore/yfinance and attach for PDF rendering
+        # Fetch rich financial data from Firestore/AskAnalyst and attach for PDF rendering
         raw_data: dict = {}
         try:
             from data.market_data import get_financial_statements, get_fundamentals

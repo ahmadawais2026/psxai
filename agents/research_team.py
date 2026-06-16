@@ -130,8 +130,8 @@ class ResearchTeam:
                 debate_log.append({"round": r, "agent": "Bear Researcher (Role-Reversed)", "output": latest_bear})
                 
                 # Revert personas (optional, but good practice)
-                self.bear.system_prompt = self.bull.system_prompt
-                self.bull.system_prompt = bull_persona_temp
+                self.bear.persona = self.bull.persona
+                self.bull.persona = bull_persona_temp
                 
             else:
                 # Bull responds to Bear

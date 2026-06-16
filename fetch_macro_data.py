@@ -8,7 +8,7 @@ Uses robust Gemini schema-enforced extraction with deterministic verification
 and change-gated cache checks, falling back to regex when needed.
 
 Sources:
-  1. yfinance          — PKR/USD, Brent crude, WTI crude
+  1. Yahoo REST        — PKR/USD, Brent crude, WTI crude
   2. Morning briefing  — KSE-100 level & changes, LIPI/FIPI flows, indices
   3. Economy .md files — SBP policy rate, CPI/inflation
 
@@ -166,28 +166,32 @@ def save_cache(cache: dict) -> None:
     _save_json(CACHE_PATH, cache)
 
 
-# ── 1. yfinance live prices ────────────────────────────────────────────────
+# ── 1. Yahoo REST live prices ────────────────────────────────────────────────
 
 def fetch_live_prices() -> dict:
-    """Fetch PKR/USD, Brent, WTI from yfinance."""
+    """Fetch PKR/USD, Brent, WTI from direct Yahoo Finance REST API."""
+    import requests
     result: dict = {}
-    try:
-        import yfinance as yf
-        SYMBOLS = {
-            "pkr_per_usd":   "PKR=X",
-            "brent_usd_bbl": "BZ=F",
-            "wti_usd_bbl":   "CL=F",
-        }
-        for key, sym in SYMBOLS.items():
-            try:
-                price = yf.Ticker(sym).fast_info.last_price
+    SYMBOLS = {
+        "pkr_per_usd":   "PKR=X",
+        "brent_usd_bbl": "BZ=F",
+        "wti_usd_bbl":   "CL=F",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    for key, sym in SYMBOLS.items():
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+            r = requests.get(url, headers=headers, timeout=8)
+            if r.status_code == 200:
+                res_data = r.json()
+                price = res_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
                 if price:
                     result[key] = round(float(price), 2)
                     logger.info(f"Live market: {key} = {result[key]}")
-            except Exception as e:
-                logger.warning(f"{sym} fetch failed: {e}")
-    except ImportError:
-        logger.warning("yfinance not installed — skipping live prices")
+        except Exception as e:
+            logger.warning(f"{sym} fetch failed: {e}")
     return result
 
 
@@ -651,7 +655,7 @@ def main(no_live: bool = False) -> None:
 
     # 1. Live prices
     if not no_live:
-        logger.info("[1] Fetching live prices (yfinance)...")
+        logger.info("[1] Fetching live prices (Yahoo REST)...")
         macro.update(fetch_live_prices())
     else:
         logger.info("[1] Skipping live prices (--no-live)")
@@ -706,6 +710,6 @@ def main(no_live: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch Pakistan macro data snapshot")
-    parser.add_argument("--no-live", action="store_true", help="Skip yfinance live prices")
+    parser.add_argument("--no-live", action="store_true", help="Skip live prices")
     args = parser.parse_args()
     main(no_live=args.no_live)

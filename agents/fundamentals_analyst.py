@@ -101,7 +101,7 @@ class FundamentalsAnalystAgent(BaseAgent):
             f"  Debt to Equity: {fundamentals.get('debt_equity', 'N/A')}",
             f"  Beta: {fundamentals.get('beta', 'N/A')}",
             "",
-            "── INCOME STATEMENT HIGHLIGHTS (Firestore/yfinance) ──",
+            "── INCOME STATEMENT HIGHLIGHTS (Firestore/AskAnalyst) ──",
             f"  Revenue (TTM): {financials.get('revenue', 'N/A')}",
             f"  Net Income (TTM): {financials.get('net_income', 'N/A')}",
             f"  Operating Margin: {financials.get('operating_margin', 'N/A')}",
