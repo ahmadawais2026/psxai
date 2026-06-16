@@ -185,15 +185,23 @@ def analyze_stock():
     try:
         data = request.get_json(force=True)
         symbol = data.get("symbol", "").strip().upper()
+        model_name = data.get("model", "").strip() or "gemini-3.1-flash-lite"
 
         if not symbol:
             return jsonify({"error": "Symbol is required"}), 400
 
-        # Check if Gemini is configured
-        if not GEMINI_API_KEY:
-            return jsonify({
-                "error": "Gemini API key not configured. Please add GEMINI_API_KEY to your .env file."
-            }), 503
+        # Check API key configuration based on model selection
+        if "deepseek" in model_name.lower():
+            from config import DEEPSEEK_API_KEY
+            if not DEEPSEEK_API_KEY:
+                return jsonify({
+                    "error": "DeepSeek API key not configured. Please add DEEPSEEK_API_KEY to your config or environment variables."
+                }), 503
+        else:
+            if not GEMINI_API_KEY:
+                return jsonify({
+                    "error": "Gemini API key not configured. Please add GEMINI_API_KEY to your .env file."
+                }), 503
 
         # Get portfolio context if requested
         user_context = None
@@ -208,7 +216,7 @@ def analyze_stock():
 
         # Run the full orchestrator pipeline
         orchestrator = _get_orchestrator()
-        report = orchestrator.analyze(symbol, user_context=user_context)
+        report = orchestrator.analyze(symbol, user_context=user_context, model_name=model_name)
 
         if report is None:
             return jsonify({"error": f"Could not analyze '{symbol}'. Ticker may not exist on PSX."}), 404

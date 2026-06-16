@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let portfolio = [];
     let currentTheme = 'dark';
     let currentReport = null;   // stores the full analysis report for PDF download
+    let selectedModel = localStorage.getItem('psx_selected_model') || 'gemini-3.1-flash-lite';
 
     // ── DOM ELEMENTS ─────────────────────────────────────────────────
     // Theme Toggle
@@ -41,6 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
     const recentSearchesContainer = document.getElementById('recent-searches');
     const recentList = document.getElementById('recent-list');
+    const modelSelect = document.getElementById('model-select');
 
     // Main Analysis Views
     const analysisSection = document.getElementById('analysis-section');
@@ -298,6 +300,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Retry button
         btnRetry.addEventListener('click', () => triggerAnalysis(currentTicker));
+
+        // Model selector change listener
+        if (modelSelect) {
+            modelSelect.value = selectedModel;
+            modelSelect.addEventListener('change', (e) => {
+                selectedModel = e.target.value;
+                localStorage.setItem('psx_selected_model', selectedModel);
+            });
+        }
 
         // Collapsible Add Holding Form
         btnToggleAddForm.addEventListener('click', toggleAddHoldingForm);
@@ -905,7 +916,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 headers: headers,
                 body: JSON.stringify({
                     symbol: symbol,
-                    include_portfolio: true
+                    include_portfolio: true,
+                    model: selectedModel
                 })
             });
 

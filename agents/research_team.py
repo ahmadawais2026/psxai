@@ -33,6 +33,17 @@ class ResearchTeam:
         self.bear = BaseAgent("Bear Researcher", BEAR_RESEARCHER_PERSONA)
         self.synthesizer = BaseAgent("Debate Synthesizer", DEBATE_SYNTHESIZER_PERSONA)
 
+    @property
+    def model_name(self) -> Optional[str]:
+        return getattr(self, "_model_name", None)
+
+    @model_name.setter
+    def model_name(self, value: Optional[str]) -> None:
+        self._model_name = value
+        self.bull.model_name = value
+        self.bear.model_name = value
+        self.synthesizer.model_name = value
+
     def debate(self, analyst_reports: Dict[str, Any], rounds: int = 2) -> Dict[str, Any]:
         """
         Execute a multi-round debate between Bull and Bear researchers.

@@ -85,61 +85,148 @@ class BaseAgent:
         errors receive an extra-long initial wait so the quota can replenish.
         """
         full_prompt = f"{context}\n\n{prompt}" if context else prompt
-        self._log(f"Querying ({len(full_prompt)} chars) …")
+        model = getattr(self, "model_name", None) or GEMINI_MODEL
 
-        last_error: Optional[Exception] = None
-        for attempt in range(1, 4):
-            try:
-                # Query with config enabling the high/max thinking level (-1)
-                response = self.client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=full_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.persona,
-                        temperature=GEMINI_TEMPERATURE,
-                        max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
-                        thinking_config=types.ThinkingConfig(
-                            thinking_budget=-1  # Maximize reasoning budget
-                        )
+        if "deepseek" in model.lower():
+            from config import DEEPSEEK_API_KEY
+            self._log(f"Querying DeepSeek model {model} ({len(full_prompt)} chars) …")
+
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+            }
+
+            payload = {
+                "model": "deepseek-v4-pro",
+                "messages": [
+                    {"role": "system", "content": self.persona},
+                    {"role": "user", "content": full_prompt}
+                ],
+                "temperature": GEMINI_TEMPERATURE
+            }
+
+            # Enable thinking/reasoning mode for DeepSeek V4Pro (Max)
+            payload["extra_body"] = {
+                "thinking": {
+                    "type": "enabled"
+                }
+            }
+            payload["reasoning_effort"] = "high"
+
+            last_error: Optional[Exception] = None
+            import requests
+            for attempt in range(1, 4):
+                try:
+                    # DeepSeek thinking models can take up to 2 minutes under load
+                    response = requests.post(
+                        "https://api.deepseek.com/chat/completions",
+                        json=payload,
+                        headers=headers,
+                        timeout=120
                     )
-                )
 
-                if response.text:
-                    text = response.text.strip()
-                    self._log(f"Response received ({len(text)} chars).")
-                    return text
+                    if response.status_code == 200:
+                        res_json = response.json()
+                        text = res_json["choices"][0]["message"]["content"].strip()
+                        self._log(f"DeepSeek Response received ({len(text)} chars).")
+                        return text
 
-                self._log("Empty response from model — retrying …")
-                last_error = RuntimeError("Model returned an empty response.")
+                    # Try falling back without thinking/extra_body if we get a 400 bad request
+                    if response.status_code == 400 and "extra_body" in payload:
+                        self._log("DeepSeek thinking mode parameters failed, retrying without thinking configuration...")
+                        payload.pop("extra_body", None)
+                        payload.pop("reasoning_effort", None)
+                        continue
 
-            except Exception as exc:
-                last_error = exc
-                err_str = str(exc)
+                    err_text = response.text
+                    self._log(f"DeepSeek API error (status {response.status_code}): {err_text}")
+                    last_error = RuntimeError(f"DeepSeek API error: {err_text}")
 
-                # Rate-limit: wait longer.
-                if "429" in err_str or "quota" in err_str.lower():
-                    wait = 15 * attempt  # 15 s, 30 s, 45 s
+                except Exception as exc:
+                    last_error = exc
+                    self._log(f"DeepSeek query failed: {exc}")
+
+                # Back-off before retry
+                wait = 2 ** attempt
+                time.sleep(wait)
+
+            self._log(f"All DeepSeek attempts failed. Last error: {last_error}")
+            return (
+                f"[{self.name}] DeepSeek analysis unavailable. Last error: {last_error}"
+            )
+
+        else:
+            self._log(f"Querying Gemini model {model} ({len(full_prompt)} chars) …")
+
+            last_error: Optional[Exception] = None
+            for attempt in range(1, 4):
+                try:
+                    # Query with config enabling the high/max thinking level if supported
+                    try:
+                        response = self.client.models.generate_content(
+                            model=model,
+                            contents=full_prompt,
+                            config=types.GenerateContentConfig(
+                                system_instruction=self.persona,
+                                temperature=GEMINI_TEMPERATURE,
+                                max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
+                                thinking_config=types.ThinkingConfig(
+                                    thinking_budget=-1  # Maximize reasoning budget
+                                )
+                            )
+                        )
+                    except Exception as config_exc:
+                        # Fallback for models that do not support thinking_config
+                        if "thinking" in str(config_exc).lower() or "validation" in str(config_exc).lower():
+                            self._log(f"Model {model} doesn't support thinking_config. Retrying without it...")
+                            response = self.client.models.generate_content(
+                                model=model,
+                                contents=full_prompt,
+                                config=types.GenerateContentConfig(
+                                    system_instruction=self.persona,
+                                    temperature=GEMINI_TEMPERATURE,
+                                    max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS
+                                )
+                            )
+                        else:
+                            raise config_exc
+
+                    if response.text:
+                        text = response.text.strip()
+                        self._log(f"Response received ({len(text)} chars).")
+                        return text
+
+                    self._log("Empty response from model — retrying …")
+                    last_error = RuntimeError("Model returned an empty response.")
+
+                except Exception as exc:
+                    last_error = exc
+                    err_str = str(exc)
+
+                    # Rate-limit: wait longer.
+                    if "429" in err_str or "quota" in err_str.lower():
+                        wait = 15 * attempt  # 15 s, 30 s, 45 s
+                        self._log(
+                            f"Rate-limited (429). Waiting {wait}s "
+                            f"(attempt {attempt}/3) …"
+                        )
+                        time.sleep(wait)
+                        continue
+
+                    # Generic transient error: standard back-off.
+                    wait = 2 ** attempt  # 2 s, 4 s, 8 s
                     self._log(
-                        f"Rate-limited (429). Waiting {wait}s "
+                        f"Error: {err_str}. Retrying in {wait}s "
                         f"(attempt {attempt}/3) …"
                     )
                     time.sleep(wait)
-                    continue
 
-                # Generic transient error: standard back-off.
-                wait = 2 ** attempt  # 2 s, 4 s, 8 s
-                self._log(
-                    f"Error: {err_str}. Retrying in {wait}s "
-                    f"(attempt {attempt}/3) …"
-                )
-                time.sleep(wait)
-
-        # All attempts exhausted.
-        self._log(f"All 3 attempts failed. Last error: {last_error}")
-        return (
-            f"[{self.name}] Analysis unavailable — the AI service is "
-            f"temporarily unreachable. Last error: {last_error}"
-        )
+            # All attempts exhausted.
+            self._log(f"All 3 attempts failed. Last error: {last_error}")
+            return (
+                f"[{self.name}] Analysis unavailable — the AI service is "
+                f"temporarily unreachable. Last error: {last_error}"
+            )
 
     # ── JSON query ────────────────────────────────────────────────
 

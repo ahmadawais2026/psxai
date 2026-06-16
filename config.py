@@ -9,6 +9,10 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 GEMINI_TEMPERATURE = 0.3          # Low temperature for analytical consistency
 GEMINI_MAX_OUTPUT_TOKENS = 4096
 
+# ── DeepSeek Configuration ────────────────────────────────────
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-021611cb3eda434c97c3be1b9954127c")
+
+
 # ── Firebase Configuration ────────────────────────────────────
 import firebase_admin
 from firebase_admin import credentials, firestore

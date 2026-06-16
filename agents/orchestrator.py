@@ -39,22 +39,32 @@ class Orchestrator:
         self.research_team = ResearchTeam()
         self.portfolio_manager = PortfolioManagerAgent()
 
-    def analyze(self, symbol: str, user_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def analyze(self, symbol: str, user_context: Optional[Dict[str, Any]] = None, model_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Run the complete multi-agent analysis pipeline for a ticker.
         
         Args:
             symbol: Ticker symbol (e.g. 'OGDC')
             user_context: Optional manual override for user portfolio details.
+            model_name: Optional custom AI model name to use.
             
         Returns:
             Dict: Comprehensive advisory report.
         """
         symbol = symbol.strip().upper()
         
+        # Set the model_name on the analysts dynamically
+        if model_name:
+            self.technical_analyst.model_name = model_name
+            self.fundamentals_analyst.model_name = model_name
+            self.sentiment_analyst.model_name = model_name
+            self.risk_analyst.model_name = model_name
+            self.research_team.model_name = model_name
+            self.portfolio_manager.model_name = model_name
+        
         # ── Cache Check ───────────────────────────────────────────
         from data.cache import get_cached, set_cached
-        cache_key = f"analysis:{symbol}"
+        cache_key = f"analysis:{symbol}:{model_name}" if model_name else f"analysis:{symbol}"
         cached_report = get_cached(cache_key, ttl_seconds=3600)  # 1 hour cache
         
         # Determine if user has active holdings context to inject
