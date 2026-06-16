@@ -371,6 +371,8 @@ def get_history(
             if "Date" in df.columns:
                 df["Date"] = pd.to_datetime(df["Date"])
                 df.set_index("Date", inplace=True)
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
             return df
         except Exception:
             pass  # fall through to fresh fetch
@@ -382,7 +384,7 @@ def get_history(
                 df = psx_portal.fetch_eod_history(local)
                 if not df.empty:
                     import datetime
-                    now = datetime.datetime.now(datetime.timezone.utc)
+                    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
                     limit_date = None
                     if period == "1mo":
                         limit_date = now - datetime.timedelta(days=31)
@@ -407,6 +409,8 @@ def get_history(
                             df_reset["Date"] = df_reset["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
                         cache_data = df_reset.to_dict(orient="records")
                         set_cached(cache_key, cache_data)
+                        if df.index.tz is not None:
+                            df.index = df.index.tz_localize(None)
                         return df
                 logger.info("PSX EOD history empty or insufficient for %s, trying yfinance", local)
             except Exception as p_exc:
@@ -440,6 +444,8 @@ def get_history(
         cache_data = df_reset.to_dict(orient="records")
         set_cached(cache_key, cache_data)
 
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
         return df
 
     except Exception as exc:

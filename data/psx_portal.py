@@ -395,6 +395,8 @@ def fetch_eod_history(symbol: str) -> pd.DataFrame:
         df = pd.DataFrame(records)
         df.set_index("Date", inplace=True)
         df.sort_index(inplace=True)
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
         return df
     except Exception as exc:
         logger.error(f"Error parsing EOD history for {sym}: {exc}")
