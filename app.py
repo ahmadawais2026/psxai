@@ -185,7 +185,7 @@ def analyze_stock():
     try:
         data = request.get_json(force=True)
         symbol = data.get("symbol", "").strip().upper()
-        model_name = data.get("model", "").strip() or "gemini-3.5-flash"
+        model_name = data.get("model", "").strip() or "deepseek-v4-pro"
 
         if not symbol:
             return jsonify({"error": "Symbol is required"}), 400
@@ -240,7 +240,7 @@ def analyze_stock_stream():
         if not symbol:
             return jsonify({"error": "Ticker symbol is required"}), 400
 
-        model_name = data.get("model", "gemini-2.5-flash")
+        model_name = data.get("model", "deepseek-v4-pro")
 
         # Check API key configuration based on model selection
         if "deepseek" in model_name.lower():

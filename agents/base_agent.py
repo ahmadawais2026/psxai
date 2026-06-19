@@ -28,6 +28,11 @@ from config import (
     GEMINI_TEMPERATURE,
 )
 
+# Maximum response length for the DeepSeek path. Without an explicit cap the
+# API falls back to a short default, which truncates the granular output the
+# personas ask for once thinking-mode reasoning eats into the budget.
+DEEPSEEK_MAX_TOKENS = GEMINI_MAX_OUTPUT_TOKENS
+
 
 class BaseAgent:
     """Base class for all Gemini-backed analyst agents.
@@ -102,7 +107,8 @@ class BaseAgent:
                     {"role": "system", "content": self.persona},
                     {"role": "user", "content": full_prompt}
                 ],
-                "temperature": GEMINI_TEMPERATURE
+                "temperature": GEMINI_TEMPERATURE,
+                "max_tokens": DEEPSEEK_MAX_TOKENS
             }
 
             # Enable thinking/reasoning mode for DeepSeek V4Pro (Max)
