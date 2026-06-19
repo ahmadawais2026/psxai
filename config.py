@@ -5,9 +5,9 @@ load_dotenv()
 
 # ── Gemini Configuration ──────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-3.1-flash-lite"
-GEMINI_TEMPERATURE = 0.3          # Low temperature for analytical consistency
-GEMINI_MAX_OUTPUT_TOKENS = 4096
+GEMINI_MODEL = "gemini-3.1-pro"
+GEMINI_TEMPERATURE = 0.5          # Balanced: detailed, flowing analysis while staying factual
+GEMINI_MAX_OUTPUT_TOKENS = 100000  # Generous ceiling so deep reasoning + granular output is never truncated
 
 # ── DeepSeek Configuration ────────────────────────────────────
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-021611cb3eda434c97c3be1b9954127c")
