@@ -82,33 +82,61 @@ def filter_news_with_llm(symbol: str, articles: List[Dict[str, Any]]) -> List[Di
         model = GEMINI_MODEL
         
     filtered = []
-    
+
     # We will process them in one batch to save time and API calls
     prompt = f"You are a financial entity resolution engine. Filter the following news headlines for the stock '{symbol}'. Return ONLY a JSON list of indices (0-indexed) of the articles that are explicitly and genuinely about this corporate entity or its direct market sector impacts. Discard generic noise. Respond ONLY with a JSON array of integers.\n\n"
-    
+
     for i, art in enumerate(articles):
         prompt += f"[{i}] {art.get('title')}\n"
-        
+
     try:
+        # Disable thinking and pin temperature to 0 so the response is a clean,
+        # preamble-free JSON array (gemini-3.x reasoning models otherwise emit
+        # thoughts/brackets that break the index parse). Mirrors the
+        # thinking_budget=0 pattern in fetch_psx_announcements_pdf.
         response = client.models.generate_content(
             model=model,
             contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
         )
-        # Parse the JSON array from response
-        # Using a simple regex to find the list
-        match = re.search(r'\[.*?\]', response.text, re.DOTALL)
-        if match:
-            import json
-            indices = json.loads(match.group(0))
+        # Parse the JSON array from the response. The model can still wrap the
+        # answer in prose or echo a bracketed token (e.g. "[2024]"), so scan ALL
+        # bracket groups and keep the one that parses to a list of ints — the
+        # real index array — rather than blindly taking the first match.
+        import json
+        indices = None
+        for candidate in re.findall(r'\[[\s\S]*?\]', response.text or ""):
+            try:
+                parsed = json.loads(candidate)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(parsed, list) and all(isinstance(x, int) for x in parsed):
+                # Prefer the largest valid index array found.
+                if indices is None or len(parsed) > len(indices):
+                    indices = parsed
+
+        if indices:
             for i in indices:
                 if 0 <= i < len(articles):
                     filtered.append(articles[i])
             logger.info(f"LLM Entity Resolution filtered {len(articles)} articles down to {len(filtered)} for {symbol}")
+
+        # Fail open: an empty/garbage result means the parse or the model failed,
+        # NOT that every article is noise. Never collapse a non-empty input to
+        # empty — that is what silently dropped the AGP merger news.
+        if filtered:
             return filtered
+        logger.warning(
+            f"LLM Entity Resolution returned no usable indices for {symbol}; "
+            f"keeping all {len(articles)} articles (fail-open)."
+        )
     except Exception as e:
         logger.error(f"LLM Entity Resolution failed for {symbol}: {e}")
-        
-    return articles # Fallback to all articles if LLM fails
+
+    return articles # Fallback to all articles if LLM fails or filters to empty
 
 def _parse_pub_date(published: str) -> datetime:
     """Best-effort parse of the various ``published`` formats into a datetime.
@@ -128,7 +156,7 @@ def _parse_pub_date(published: str) -> datetime:
             continue
     return datetime.min
 
-def fetch_psx_announcements_pdf(symbol: str, max_pdfs: int = 2) -> List[Dict[str, Any]]:
+def fetch_psx_announcements_pdf(symbol: str, max_pdfs: int = 5) -> List[Dict[str, Any]]:
     """
     Tier 0: Scrape PSX Portal for recent corporate announcements and use Gemini Flash-Lite
     to extract Title, Date, and Summary from the PDF bytes natively.
@@ -205,6 +233,41 @@ def fetch_psx_announcements_pdf(symbol: str, max_pdfs: int = 2) -> List[Dict[str
         logger.error(f"Failed to fetch PSX Portal PDFs for {symbol}: {e}")
         return []
 
+def fetch_mettis_announcements(symbol: str) -> List[Dict[str, Any]]:
+    """
+    Fetch structured news from Mettis Global's WordPress REST API.
+    """
+    extracted = []
+    try:
+        url = "https://mettisglobal.news/wp-json/wp/v2/posts"
+        params = {"per_page": 10, "search": symbol}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        
+        if r.status_code == 200:
+            posts = r.json()
+            for post in posts:
+                title = post.get("title", {}).get("rendered", "")
+                # Skip if the symbol is not in the title (to avoid generic search hits)
+                if symbol.upper() not in title.upper():
+                    continue
+                
+                # Try to extract a summary snippet from excerpt
+                excerpt = post.get("excerpt", {}).get("rendered", "")
+                import re
+                summary = re.sub('<[^<]+>', '', excerpt).strip()
+                
+                extracted.append({
+                    "title": title,
+                    "link": post.get("link", ""),
+                    "published": post.get("date", ""),
+                    "source": "Mettis Global",
+                    "summary": summary
+                })
+    except Exception as e:
+        logger.error(f"Failed to fetch Mettis Global for {symbol}: {e}")
+        
+    return extracted
 
 
 def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
@@ -231,9 +294,16 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
         company_id = PSX_TICKERS[clean_sym].get("askanalyst_id")
         company_name = PSX_TICKERS[clean_sym].get("name", "")
         
-    # Tier 0: Direct PSX Portal PDF Extraction
+    # Tier 0.1: Direct PSX Portal PDF Extraction
     psx_announcements = fetch_psx_announcements_pdf(clean_sym)
     for ann in psx_announcements:
+        if ann["title"] not in seen_titles:
+            seen_titles.add(ann["title"])
+            raw_articles.append(ann)
+            
+    # Tier 0.2: Mettis Global JSON API
+    mettis_news = fetch_mettis_announcements(clean_sym)
+    for ann in mettis_news:
         if ann["title"] not in seen_titles:
             seen_titles.add(ann["title"])
             raw_articles.append(ann)
@@ -341,11 +411,19 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
     # Apply Deduplication Pipeline
     deduped_articles = _deduplicate_articles(ranked)
     
-    # Apply LLM Entity Resolution (Noise Filtering)
-    # We only pass top 20 to LLM to save tokens
-    final_articles = filter_news_with_llm(symbol, deduped_articles[:20])
+    # Apply LLM Entity Resolution (Noise Filtering) ONLY to Tier 2/3 sources
+    tier0_articles = [a for a in deduped_articles if a.get("source") in ("PSX Portal", "Mettis Global")]
+    other_articles = [a for a in deduped_articles if a.get("source") not in ("PSX Portal", "Mettis Global")]
     
-    # Truncate and cache
+    filtered_other = filter_news_with_llm(symbol, other_articles[:20])
+    
+    final_articles = tier0_articles + filtered_other
+    final_articles.sort(key=lambda a: _parse_pub_date(a.get("published", "")), reverse=True)
+    
+    # Truncate and cache. Do NOT cache an empty result — a transient zero-fetch
+    # (blocked source, LLM hiccup) would otherwise be frozen for the whole TTL
+    # and starve every later run of news.
     final_articles = final_articles[:max_articles]
-    set_cached(cache_key, final_articles)
+    if final_articles:
+        set_cached(cache_key, final_articles)
     return final_articles

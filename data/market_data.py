@@ -204,6 +204,12 @@ def _parse_firestore_financials_to_highlights(data: Dict[str, Any], symbol: str)
     total_assets = get_metric_value("balance_sheet", ["total asset - total assets", "total assets", "total asset"])
     total_liabilities = get_metric_value("balance_sheet", ["total liabilities - total liabilities", "total liabilities", "total liability"])
     cash = get_metric_value("balance_sheet", ["cash & bank balances", "cash and balances with treasury banks", "cash and cash equivalents"])
+
+    # Paid-up (share) capital — enables a deterministic share count
+    # (shares_mn = paid_up_capital / 10 at PKR 10 par value) when the live
+    # AskAnalyst shares endpoint is unavailable. Same convention as
+    # calculate_cashflows.py.
+    paid_up_capital = get_metric_value("balance_sheet", ["equity - paid-up capital", "paid-up capital", "paid up capital", "share capital"])
     
     operating_cash_flow = get_metric_value("cash_flow", ["operating cash flow", "net cash generated from operating activities", "cash flow from operating activities"])
 
@@ -246,9 +252,10 @@ def _parse_firestore_financials_to_highlights(data: Dict[str, Any], symbol: str)
         "free_cash_flow": free_cash_flow,
         "eps": eps,
         "roe": roe,
-        "dividend_yield": dividend_yield
+        "dividend_yield": dividend_yield,
+        "paid_up_capital": paid_up_capital,
     })
-    
+
     return result
 
 
@@ -788,25 +795,50 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 total_liabilities = highlights.get("total_liabilities", 0.0)
                 equity = total_assets - total_liabilities
                 
-                # Retrieve shares outstanding from AskAnalyst if possible
+                # Retrieve shares outstanding (in MILLIONS) from AskAnalyst if
+                # possible — a single short attempt, since the AskAnalyst host is
+                # frequently unreachable and a 3×15s retry loop just hangs the
+                # whole analysis (~45s) before falling through anyway.
                 shares_outstanding = None
-                try:
-                    ask_id = _get_askanalyst_id(symbol)
-                    if ask_id:
-                        r_ask = requests.get(f"https://api.askanalyst.com.pk/api/sharepricedatanew/{ask_id}", timeout=5)
+                ask_id = _get_askanalyst_id(symbol)
+                if ask_id:
+                    try:
+                        r_ask = requests.get(f"https://api.askanalyst.com.pk/api/sharepricedatanew/{ask_id}", timeout=8)
                         if r_ask.status_code == 200:
                             quote_raw = r_ask.json()
-                            shares_outstanding = float(quote_raw.get("shares") or 0.0)
-                except:
-                    pass
-                
+                            shares_outstanding = float(quote_raw.get("shares") or 0.0) or None
+                    except Exception as e:
+                        logger.warning("AskAnalyst shares fetch failed for %s: %s", local, e)
+
+                # Deterministic fallback: derive shares (millions) from paid-up
+                # capital already in the filed balance sheet, at PKR 10 par value
+                # (shares_mn = paid_up_capital_mn / 10). This keeps the DCF alive
+                # without depending on the flaky live shares endpoint.
+                if not shares_outstanding or shares_outstanding <= 0:
+                    paid_up = highlights.get("paid_up_capital") or 0.0
+                    if paid_up > 0:
+                        shares_outstanding = paid_up / 10.0
+                        logger.info(
+                            "Derived shares for %s from paid-up capital: %.2f mn",
+                            local, shares_outstanding,
+                        )
+
+                # Both equity (statement) and shares_outstanding are in MILLIONS,
+                # so book value per share = equity_mn / shares_mn (PKR/share).
                 book_value = None
                 pb_ratio = None
                 if shares_outstanding and shares_outstanding > 0:
-                    book_value = equity / (shares_outstanding / 1000000.0) # assuming statement units are millions (PKR mn)
+                    book_value = equity / shares_outstanding
                     if book_value > 0:
                         pb_ratio = price / book_value
-                
+
+                # Market cap (absolute PKR) = price × shares (mn) × 1e6 — same
+                # units as the AskAnalyst fallback branch below. Populating it
+                # here also lets the agent's mcap/price share fallback work.
+                market_cap = None
+                if price and shares_outstanding and shares_outstanding > 0:
+                    market_cap = price * shares_outstanding * 1_000_000.0
+
                 roe = highlights.get("roe")
                 if roe is None and equity > 0:
                     roe = (highlights.get("net_income", 0.0) / equity) * 100
@@ -828,7 +860,8 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                     "revenue":              highlights.get("revenue"),
                     "net_income":           highlights.get("net_income"),
                     "book_value":           book_value,
-                    "shares_outstanding":   shares_outstanding,  # absolute share count (for DCF unit consistency)
+                    "shares_outstanding":   shares_outstanding,  # in MILLIONS (matches FCFE units for the DCF)
+                    "market_cap":           market_cap,
                     "free_cash_flow":       highlights.get("free_cash_flow"),
                     "currency":             "PKR",
                 }
@@ -851,9 +884,18 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
     try:
         ask_id = _get_askanalyst_id(symbol)
         if ask_id:
-            r_ask = requests.get(f"https://api.askanalyst.com.pk/api/sharepricedatanew/{ask_id}", timeout=8)
-            if r_ask.status_code == 200:
-                info = r_ask.json()
+            info = None
+            for _ in range(3):
+                try:
+                    r_ask = requests.get(f"https://api.askanalyst.com.pk/api/sharepricedatanew/{ask_id}", timeout=15)
+                    if r_ask.status_code == 200:
+                        info = r_ask.json()
+                        break
+                except:
+                    import time
+                    time.sleep(1)
+            
+            if info:
                 from data.psx_tickers import PSX_TICKERS
                 name = PSX_TICKERS.get(local, {}).get("name", local)
                 sector = PSX_TICKERS.get(local, {}).get("sector", "N/A")
