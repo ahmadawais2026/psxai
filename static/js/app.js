@@ -62,6 +62,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const stepDebate = document.getElementById('step-debate');
     const stepRecommendation = document.getElementById('step-recommendation');
 
+    // Progressive-reveal state (live analysis insights)
+    let analysisTimer = null;
+    let analysisStartMs = 0;
+    let progressiveMode = false;
+
     // Agent Cards
     const badgeTechnicalTrend = document.getElementById('badge-technical-trend');
     const contentTechnical = document.getElementById('content-technical');
@@ -898,6 +903,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 setStepStatus(el, 'pending');
             });
 
+            progressiveMode = false;
+            startAnalysisTimer();
+
             // Build headers with Authorization Bearer if user is logged in
             const headers = { 'Content-Type': 'application/json' };
             const user = firebase.auth().currentUser;
@@ -952,34 +960,28 @@ document.addEventListener('DOMContentLoaded', async () => {
                                         setStepStatus(el, 'working');
                                     });
                                 } else if (event.event === 'node_finish') {
-                                    if (event.node === 'technical') {
-                                        setStepStatus(stepTechnical, 'done');
-                                        nodeStates.technical = true;
-                                    } else if (event.node === 'fundamental') {
-                                        setStepStatus(stepFundamental, 'done');
-                                        nodeStates.fundamental = true;
-                                    } else if (event.node === 'sentiment') {
-                                        setStepStatus(stepSentiment, 'done');
-                                        nodeStates.sentiment = true;
-                                    } else if (event.node === 'risk') {
-                                        setStepStatus(stepRisk, 'done');
-                                        nodeStates.risk = true;
-                                    } else if (event.node === 'debate') {
-                                        setStepStatus(stepDebate, 'done');
-                                        setStepStatus(stepRecommendation, 'working');
-                                    } else if (event.node === 'portfolio' || event.node === 'portfolio_custom') {
-                                        setStepStatus(stepRecommendation, 'done');
+                                    const d = event.data || {};
+                                    // Progressive reveal: fill each agent's card the moment it finishes.
+                                    if (d.technical_report)   { enterProgressiveMode(); renderTechnicalCard(d.technical_report);     markStepDone(stepTechnical, 'technical'); }
+                                    if (d.fundamental_report) { enterProgressiveMode(); renderFundamentalCard(d.fundamental_report); markStepDone(stepFundamental, 'fundamental'); }
+                                    if (d.sentiment_report)   { enterProgressiveMode(); renderSentimentCard(d.sentiment_report);     markStepDone(stepSentiment, 'sentiment'); }
+                                    if (d.risk_report)        { enterProgressiveMode(); renderRiskCard(d.risk_report);               markStepDone(stepRisk, 'risk'); }
+                                    if (d.debate_result)      { debateSection.removeAttribute('hidden'); renderDebate(d.debate_result); setStepStatus(stepDebate, 'done'); }
+                                    if (d.recommendation)     { verdictSection.removeAttribute('hidden'); renderVerdict(d.recommendation); setStepStatus(stepRecommendation, 'done'); }
+
+                                    // Status-only fallback for any event without a data payload.
+                                    if (!event.data) {
+                                        const stepByNode = { technical: stepTechnical, fundamental: stepFundamental, sentiment: stepSentiment, risk: stepRisk, debate: stepDebate, portfolio: stepRecommendation, portfolio_custom: stepRecommendation };
+                                        if (stepByNode[event.node]) setStepStatus(stepByNode[event.node], 'done');
                                     }
-                                    
-                                    // If all 4 analysts finished, debate is working
-                                    if (nodeStates.technical && nodeStates.fundamental && nodeStates.sentiment && nodeStates.risk) {
-                                        if (stepDebate.querySelector('.status-icon') && !stepDebate.querySelector('.status-icon').innerHTML.includes('text-green-500')) {
-                                            // Only set to working if not already done
-                                            if (event.node !== 'debate') {
-                                                setStepStatus(stepDebate, 'working');
-                                            }
-                                        }
+
+                                    // Once all 4 analysts are in, mark the debate as the active step.
+                                    const analystsDone = [stepTechnical, stepFundamental, stepSentiment, stepRisk]
+                                        .every(el => el.getAttribute('data-status') === 'done');
+                                    if (analystsDone && stepDebate.getAttribute('data-status') !== 'done') {
+                                        setStepStatus(stepDebate, 'working');
                                     }
+                                    updateProgressLabel();
                                 } else if (event.event === 'complete' || event.event === 'cache_hit') {
                                     if (event.report) {
                                         [stepTechnical, stepFundamental, stepSentiment, stepRisk, stepDebate, stepRecommendation].forEach(el => {
@@ -1003,6 +1005,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             showErrorState(err.message || 'An unexpected error occurred. Rate limits may have been hit.');
         } finally {
             isAnalyzing = false;
+            stopAnalysisTimer();
         }
     }
 
@@ -1014,6 +1017,56 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!stepElement) return;
         // status can be: pending, working, done
         stepElement.setAttribute('data-status', status);
+    }
+
+    function startAnalysisTimer() {
+        analysisStartMs = Date.now();
+        stopAnalysisTimer();
+        analysisTimer = setInterval(updateProgressLabel, 1000);
+        updateProgressLabel();
+    }
+
+    function stopAnalysisTimer() {
+        if (analysisTimer) { clearInterval(analysisTimer); analysisTimer = null; }
+    }
+
+    function updateProgressLabel() {
+        const title = agentStatusBar && agentStatusBar.querySelector('.agent-status-title');
+        if (!title) return;
+        const steps = [stepTechnical, stepFundamental, stepSentiment, stepRisk, stepDebate, stepRecommendation];
+        const done = steps.filter(el => el && el.getAttribute('data-status') === 'done').length;
+        const secs = Math.max(0, Math.floor((Date.now() - analysisStartMs) / 1000));
+        const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+        const ss = String(secs % 60).padStart(2, '0');
+        title.textContent = `AI Agents Working · ${done}/${steps.length} · ${mm}:${ss}`;
+    }
+
+    // Switch from the initial skeleton grid to the live agent grid, placing a
+    // loading placeholder in every analyst card; arrived cards overwrite theirs.
+    function enterProgressiveMode() {
+        if (progressiveMode) return;
+        progressiveMode = true;
+        skeletonGrid.setAttribute('hidden', '');
+        agentsGrid.removeAttribute('hidden');
+        [['content-technical', 'badge-technical-trend'],
+         ['content-fundamental', 'badge-fundamental-verdict'],
+         ['content-sentiment', 'badge-sentiment-score'],
+         ['content-risk', 'badge-risk-level']].forEach(([cid, bid]) => {
+            const c = document.getElementById(cid);
+            if (c) c.innerHTML = '<div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line skeleton--short"></div><div class="skeleton skeleton--line skeleton--medium"></div>';
+            const b = document.getElementById(bid);
+            if (b && b.textContent.trim() === '—') b.textContent = '···';
+        });
+    }
+
+    // Mark an analyst step done and pulse its card so the new insight draws the eye.
+    function markStepDone(stepEl, key) {
+        setStepStatus(stepEl, 'done');
+        const card = document.getElementById('card-' + key);
+        if (card) {
+            card.classList.add('just-updated');
+            setTimeout(() => card.classList.remove('just-updated'), 1200);
+        }
     }
 
     function showLoadingState() {

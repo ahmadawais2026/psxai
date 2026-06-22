@@ -343,7 +343,10 @@ class Orchestrator:
                 for node_name, updates in step_event.items():
                     current_state.update(updates)
                     try:
-                        yield {"event": "node_finish", "node": node_name}
+                        # Include the node's state delta (its report) so the client
+                        # can reveal each analyst's findings progressively, not just
+                        # advance a status dot. Shapes match the final renderers.
+                        yield {"event": "node_finish", "node": node_name, "data": updates}
                     except GeneratorExit:
                         logger.warning("Client disconnected from stream. Continuing pipeline execution to cache results...")
                         # Run the rest of the graph to completion silently
