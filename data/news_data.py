@@ -366,14 +366,27 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
     # stale-but-large AskAnalyst feed (e.g. OGDC's 2024-only company feed)
     # crowds out fresh wire news and the result is months out of date.
     if True:
-        logger.info(f"Supplementing with Google News RSS Tier 3...")
-        query = f'"{clean_sym}" (site:dawn.com OR site:brecorder.com OR site:mettisglobal.news OR site:profit.pakistantoday.com.pk OR site:tribune.com.pk)'
+        # Query the COMPANY NAME, not the bare ticker. The bare ticker is
+        # ambiguous — e.g. "AGP" matches "Attorney General of Pakistan", which
+        # floods the feed with acronym noise and buries the real company news
+        # (the AGP merger was lost exactly this way). Pairing the full name with
+        # a Pakistan/PSX-scoped ticker clause keeps results on-entity.
+        if company_name:
+            core = company_name.replace(" Limited", "").replace(" Ltd", "").strip()
+            query = f'"{company_name}" OR "{core} Limited" OR ("{clean_sym}" Pakistan PSX)'
+        else:
+            query = f'"{clean_sym}" Pakistan PSX stock'
+        logger.info(f"Supplementing with Google News RSS Tier 3 (query: {query})")
         rss_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
         try:
             response = scraper.get(rss_url, timeout=10)
+            if response.status_code != 200:
+                logger.warning(f"Tier 3 Google News RSS for {clean_sym}: HTTP {response.status_code} (likely throttled/blocked from this IP)")
             if response.status_code == 200:
                 root = ET.fromstring(response.content)
-                for item in root.findall('./channel/item'):
+                _rss_items = root.findall('./channel/item')
+                logger.info(f"Tier 3 Google News RSS for {clean_sym}: HTTP 200, {len(_rss_items)} items returned")
+                for item in _rss_items:
                     title = item.find('title').text if item.find('title') is not None else ""
                     link = item.find('link').text if item.find('link') is not None else ""
                     pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
