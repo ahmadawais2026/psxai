@@ -288,12 +288,43 @@ def analyze_stock_stream():
         orchestrator = _get_orchestrator()
 
         def generate():
-            try:
-                for event in orchestrator.analyze_stream(symbol, user_context=user_context, model_name=model_name):
-                    yield f"data: {json.dumps(event)}\n\n"
-            except Exception as e:
-                traceback.print_exc()
-                yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
+            # The debate runs as a single multi-minute LangGraph node that emits no
+            # events, so the SSE stream would sit idle long enough for Cloud Run /
+            # the browser to drop the connection ("network error") even though the
+            # pipeline completes server-side (~4 min, HTTP 200). Run the pipeline in
+            # a worker thread and emit a heartbeat comment whenever no real event has
+            # arrived for a few seconds, so bytes keep flowing until completion.
+            import queue as _queue
+            import threading as _threading
+
+            q = _queue.Queue()
+
+            def _produce():
+                try:
+                    for event in orchestrator.analyze_stream(symbol, user_context=user_context, model_name=model_name):
+                        q.put(("event", event))
+                except Exception as exc:
+                    traceback.print_exc()
+                    q.put(("error", str(exc)))
+                finally:
+                    q.put(("done", None))
+
+            _threading.Thread(target=_produce, daemon=True).start()
+
+            while True:
+                try:
+                    kind, payload = q.get(timeout=10)
+                except _queue.Empty:
+                    # SSE comment line: ignored by the client's `data:` parser but
+                    # keeps the connection alive during the silent debate phase.
+                    yield ": keepalive\n\n"
+                    continue
+                if kind == "done":
+                    break
+                if kind == "error":
+                    yield f"data: {json.dumps({'event': 'error', 'message': payload})}\n\n"
+                    break
+                yield f"data: {json.dumps(payload)}\n\n"
 
         from flask import Response, stream_with_context
         response = Response(stream_with_context(generate()), mimetype="text/event-stream")
