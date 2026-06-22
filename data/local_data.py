@@ -380,6 +380,12 @@ def format_market_context_text(ctx: Dict[str, Any]) -> str:
         for series_name, rows in sector_data.items():
             if not isinstance(rows, list):
                 continue
+            # Some sector JSON files are arrays-of-arrays rather than
+            # arrays-of-objects; skip non-dict rows so a malformed file
+            # degrades gracefully instead of crashing the Technical Analyst.
+            rows = [r for r in rows if isinstance(r, dict)]
+            if not rows:
+                continue
             # Find the Total/aggregate row; fall back to last row
             total_row = next(
                 (r for r in rows if str(r.get("value", "")).lower() in ("total", "all", "aggregate")),
@@ -391,7 +397,7 @@ def format_market_context_text(ctx: Dict[str, Any]) -> str:
             data_pts = total_row.get("data", [])
             if isinstance(data_pts, list) and data_pts:
                 recent = data_pts[-4:]  # last 4 months
-                trend_str = "  →  ".join(f"{p.get('year','?')}: {p.get('value',0):,.0f}" for p in recent)
+                trend_str = "  →  ".join(f"{p.get('year','?')}: {p.get('value',0):,.0f}" for p in recent if isinstance(p, dict))
                 lines.append(f"  {series_name} ({label}): {trend_str}")
 
     # General market news (top 5 with body text when available)
