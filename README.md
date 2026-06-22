@@ -39,7 +39,7 @@ graph TD
 4. **Position-Aware Sizing (FinPos)**: The Portfolio Manager agent adjusts advice based on current holdings and flags overconcentration (>15% portfolio weight).
 5. **Layered Memory (FinMem)**: SQLite-backed TTL caching (quotes: 10s, history: 15min, news: 1hr, fundamentals: 24hr) to respect rate limits and reduce latency, backed by a **Firestore** store of company financials and price history.
 6. **Automated DCF Engine**: A 2-stage FCFE discounted cash-flow model (`data/dcf_engine.py`) computes Base/Bull/Bear intrinsic values and a sensitivity matrix from *live, company-specific* inputs — risk-free rate from **SBP EasyData** (T-bill / policy rate), beta computed vs. the KSE-100, and a historical growth CAGR derived from filed statements. Results are fed to the Fundamentals Analyst as grounded evidence.
-7. **API-First Data, Firecrawl for Prose**: Structured numeric data (financial statements, OHLCV prices, ratios) is pulled from the **AskAnalyst / PSX DPS JSON APIs** — never HTML-scraped. **Firecrawl** is used only for *unstructured* content (news article full-text, research reports) where there is no clean API.
+7. **API-First Data & Native PSX PDF Parsing**: Structured numeric data (financial statements, OHLCV prices, ratios) is pulled from the **AskAnalyst / PSX DPS JSON APIs**. For official material disclosures, we fetch PDF files directly from the PSX portal and process them natively using **Gemini 3.1 Flash-Lite**'s multimodal capabilities, bypassing OCR and extracting structured JSON. **Firecrawl** is retained only for third-party news article full-text extraction.
 8. **Hourly Stock Data & 7-Day Retention (FinHourly)**: Fetches raw intraday transaction ticks directly from the official PSX Data Portal, aggregates them into hourly OHLCV bars, and stores/merges them in Firestore. A strict 7-day TTL retention policy is programmatically enforced to control Firestore database storage costs.
 
 ---
@@ -71,6 +71,7 @@ The project consists of ~45 source files grouped by functional layers:
 │   ├── technical_indicators.py  # Mathematical computation of indicators & risk suite
 │   ├── news_data.py             # RSS feed & news fetcher
 │   ├── live_scraper.py          # Per-run live news refresh (AskAnalyst API)
+│   ├── pdf_extractor.py         # PSX portal fallback OCR and native PDF ingestion
 │   ├── local_data.py            # Research reports, news, financials text assembly
 │   ├── cache.py                 # SQLite TTL Cache logic
 │   ├── advisor_cache.db         # Cache database
