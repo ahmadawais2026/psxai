@@ -10,7 +10,7 @@ A premium, multi-agent financial advisory platform for the **Pakistan Stock Exch
 
 The platform uses a **LangGraph**-orchestrated pipeline of specialist agents (Technical, Fundamental, Sentiment, Risk run in parallel, then a debate and synthesis stage), integrating deterministic calculations with advanced LLM reasoning to ensure zero arithmetic hallucinations and counter agent sycophancy.
 
-**Model backend.** Agents run on a dual-model layer served entirely through **Google Vertex AI Agent Platform** (project `aiforpsx`): **DeepSeek-V4-Pro** (default, with Think Max reasoning) and **Gemini** (3.x → mapped to available Vertex model IDs). Authentication is via Application Default Credentials — no per-provider API keys at runtime.
+**Model backend.** Agents run on a **Gemini-only**, two-tier layer served through **Google Vertex AI** (Vertex project `VERTEX_PROJECT`; Firebase/Firestore is the separate `aiforpsx` project): a *reasoning* tier (`gemini-3.1-pro`) and a *fast* tier (`gemini-3.5-flash`), routed per agent role (`MODEL_TIERS` / `ROLE_TIER` in `config.py`). DeepSeek is intentionally excluded from all routing — the Google Cloud $300 free-trial credit does not cover Vertex partner MaaS models (DeepSeek/Claude/Llama/Mistral); `DEEPSEEK_API_KEY` is read from env only, for a future paid-account re-enable. Authentication is via Application Default Credentials — no per-provider model API keys at runtime.
 
 ```mermaid
 graph TD
@@ -40,6 +40,7 @@ graph TD
 5. **Layered Memory (FinMem)**: SQLite-backed TTL caching (quotes: 10s, history: 15min, news: 1hr, fundamentals: 24hr) to respect rate limits and reduce latency, backed by a **Firestore** store of company financials and price history.
 6. **Automated DCF Engine**: A 2-stage FCFE discounted cash-flow model (`data/dcf_engine.py`) computes Base/Bull/Bear intrinsic values and a sensitivity matrix from *live, company-specific* inputs — risk-free rate from **SBP EasyData** (T-bill / policy rate), beta computed vs. the KSE-100, and a historical growth CAGR derived from filed statements. Results are fed to the Fundamentals Analyst as grounded evidence.
 7. **API-First Data, Firecrawl for Prose**: Structured numeric data (financial statements, OHLCV prices, ratios) is pulled from the **AskAnalyst / PSX DPS JSON APIs** — never HTML-scraped. **Firecrawl** is used only for *unstructured* content (news article full-text, research reports) where there is no clean API.
+8. **Hourly Stock Data & 7-Day Retention (FinHourly)**: Fetches raw intraday transaction ticks directly from the official PSX Data Portal, aggregates them into hourly OHLCV bars, and stores/merges them in Firestore. A strict 7-day TTL retention policy is programmatically enforced to control Firestore database storage costs.
 
 ---
 
@@ -94,7 +95,9 @@ The project consists of ~45 source files grouped by functional layers:
 ├── config.py                    # Environment settings, model + Firebase init
 │
 │   # ── Data ingestion / maintenance scripts ──
-├── backfill_firestore.py        # Bulk-load all PSX companies (statements + 1y OHLCV) to Firestore
+├── backfill_firestore.py        # Bulk-load all PSX companies (statements + 1y OHLCV) to Firestore (rate-paced)
+├── archive_hourly_data.py       # Fetch, aggregate, and store hourly data (7-day retention)
+├── refresh_market_data.py       # Master script to refresh market data, RSS news, and archive hourly data
 ├── scrape_askanalyst.py         # AskAnalyst statement-fetch helpers (income/balance/cash-flow)
 ├── refresh_company_data.py      # Per-ticker company data refresh
 ├── download_research_reports.py # Download + extract broker research PDFs to markdown
@@ -150,14 +153,14 @@ FLASK_DEBUG=true
 ```
 
 ### 5. Backfill Firestore (first run)
-Populate company financials and 12-month price history for all PSX companies:
+Populate company financials and 12-month price history for all PSX companies. The scripts enforce a global 1.0s rate-limit pacing lock to respect the AskAnalyst API rate limit (60 requests/minute):
 ```bash
 # Validate fetch + shape without writing
 python backfill_firestore.py --dry-run --tickers ABOT OGDC
 
-# Small live batch, then the full universe
+# Small live batch, then the full universe (with concurrency and sleep pacing)
 python backfill_firestore.py --tickers ABOT OGDC LUCK
-python backfill_firestore.py --all --skip-existing
+python backfill_firestore.py --all --skip-existing --workers 2 --sleep 5.0
 ```
 
 ### 6. Running the Application Locally
