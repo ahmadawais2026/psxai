@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import logging
 import re
+import json
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
 import cloudscraper
 import urllib.parse
+import requests
+from bs4 import BeautifulSoup
 from google import genai
+from google.genai import types
 
 from config import CACHE_TTL_NEWS, GEMINI_API_KEY, GEMINI_MODEL, USE_VERTEX, VERTEX_PROJECT, VERTEX_LOCATION, map_model_name
 from data.cache import get_cached, set_cached
@@ -116,12 +120,91 @@ def _parse_pub_date(published: str) -> datetime:
         return datetime.min
     s = str(published).strip()
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
-                "%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z"):
+                "%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z",
+                "%B %d, %Y"):
         try:
             return datetime.strptime(s, fmt).replace(tzinfo=None)
         except (ValueError, TypeError):
             continue
     return datetime.min
+
+def fetch_psx_announcements_pdf(symbol: str, max_pdfs: int = 2) -> List[Dict[str, Any]]:
+    """
+    Tier 0: Scrape PSX Portal for recent corporate announcements and use Gemini Flash-Lite
+    to extract Title, Date, and Summary from the PDF bytes natively.
+    """
+    if not USE_VERTEX:
+        return []
+        
+    logger.info(f"Fetching PSX Portal PDFs for {symbol}...")
+    url = f'https://dps.psx.com.pk/company/{symbol.upper()}'
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return []
+            
+        soup = BeautifulSoup(r.text, 'html.parser')
+        pdf_links = soup.find_all('a', href=lambda h: h and '/download/document/' in h)
+        
+        client = genai.Client(vertexai=True, project=VERTEX_PROJECT, location=VERTEX_LOCATION)
+        extracted = []
+        
+        for pdf_link in pdf_links[:max_pdfs]:
+            pdf_url = 'https://dps.psx.com.pk' + pdf_link['href']
+            
+            # 1. Download PDF bytes
+            pdf_resp = requests.get(pdf_url, headers=headers, timeout=10)
+            if pdf_resp.status_code != 200:
+                continue
+                
+            pdf_bytes = pdf_resp.content
+            if len(pdf_bytes) < 1000 or not pdf_bytes.startswith(b"%PDF"):
+                continue # Skip invalid PDFs or empty HTML error pages
+                
+            # 2. Extract with Gemini 3.1 Flash-Lite
+            prompt = "Extract the following from this PSX announcement: Title, Date, Category (e.g. Board Meeting, Financial Results, Merger, Other), and a brief Summary of the material information. Format as JSON with keys: title, date, category, summary."
+            
+            try:
+                response = client.models.generate_content(
+                    model='gemini-3.1-flash-lite-preview',
+                    contents=[
+                        types.Part.from_bytes(data=pdf_bytes, mime_type='application/pdf'),
+                        prompt
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        max_output_tokens=2048,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0)
+                    )
+                )
+                
+                # 3. Parse JSON Output
+                text = response.text
+                match = re.search(r'\{.*\}', text, re.DOTALL)
+                if match:
+                    data = json.loads(match.group(0))
+                    title = data.get("title", "PSX Announcement")
+                    summary = data.get("summary", "")
+                    if data.get("category"):
+                        title = f"[{data['category']}] {title}"
+                        
+                    extracted.append({
+                        "title": title,
+                        "link": pdf_url,
+                        "published": data.get("date", ""),
+                        "source": "PSX Portal",
+                        "summary": summary
+                    })
+            except Exception as e:
+                logger.error(f"Gemini PDF extraction failed for {pdf_url}: {e}")
+                
+        return extracted
+    except Exception as e:
+        logger.error(f"Failed to fetch PSX Portal PDFs for {symbol}: {e}")
+        return []
+
 
 
 def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
@@ -148,6 +231,13 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
         company_id = PSX_TICKERS[clean_sym].get("askanalyst_id")
         company_name = PSX_TICKERS[clean_sym].get("name", "")
         
+    # Tier 0: Direct PSX Portal PDF Extraction
+    psx_announcements = fetch_psx_announcements_pdf(clean_sym)
+    for ann in psx_announcements:
+        if ann["title"] not in seen_titles:
+            seen_titles.add(ann["title"])
+            raw_articles.append(ann)
+            
     # Tier 1: Try AskAnalyst endpoints via cloudscraper
     if company_id:
         try:
