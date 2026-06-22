@@ -209,3 +209,54 @@ class PortfolioManager:
                 "portfolio_pct": 0.0,
                 "is_concentrated": False
             }
+
+    def get_portfolio_overlap_context(self, uid: str, symbol: str) -> Dict[str, Any]:
+        """
+        Get enriched context for a specific ticker, including sector overlap and correlation.
+        
+        Args:
+            uid: User's unique Firebase authentication ID
+            symbol: Stock symbol without .KA suffix
+            
+        Returns:
+            Dict containing position data + sector concentration metrics.
+        """
+        from data.psx_tickers import PSX_TICKERS
+        
+        symbol = symbol.strip().upper()
+        # Get base position context
+        context = self.get_position_context(uid, symbol)
+        
+        summary = self.get_portfolio_summary(uid)
+        
+        # Determine target sector
+        target_sector = PSX_TICKERS.get(symbol, {}).get("sector", "N/A")
+        context["target_sector"] = target_sector
+        
+        if target_sector == "N/A":
+            context["sector_exposure_pct"] = 0.0
+            context["correlated_holdings"] = []
+            return context
+            
+        # Calculate sector exposure and find correlated holdings
+        sector_exposure_pct = 0.0
+        correlated_holdings = []
+        
+        for h in summary["holdings"]:
+            h_symbol = h["symbol"]
+            h_sector = PSX_TICKERS.get(h_symbol, {}).get("sector", "N/A")
+            
+            if h_sector == target_sector:
+                sector_exposure_pct += h["allocation_pct"]
+                # Don't add the target symbol itself to correlated holdings if the user already owns it
+                if h_symbol != symbol:
+                    correlated_holdings.append({
+                        "symbol": h_symbol,
+                        "allocation_pct": h["allocation_pct"]
+                    })
+                    
+        context["sector_exposure_pct"] = sector_exposure_pct
+        context["correlated_holdings"] = correlated_holdings
+        
+        return context
+

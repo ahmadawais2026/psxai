@@ -5,12 +5,81 @@ load_dotenv()
 
 # ── Gemini Configuration ──────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-3.1-pro"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-pro")
 GEMINI_TEMPERATURE = 0.5          # Balanced: detailed, flowing analysis while staying factual
 GEMINI_MAX_OUTPUT_TOKENS = 100000  # Generous ceiling so deep reasoning + granular output is never truncated
 
+# ── Vertex AI Configuration ───────────────────────────────────
+USE_VERTEX = os.getenv("USE_VERTEX", "true").lower() == "true"
+VERTEX_PROJECT = os.getenv("VERTEX_PROJECT", "project-744d0520-c16e-4aa5-b3e")
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
+
+def map_model_name(model_name: str) -> str:
+    """Map the UI's model selection to the exact Vertex AI model ID.
+
+    The 3.x Gemini models are now live in Vertex Model Garden, so selections
+    pass through unchanged. This function previously rewrote 3.x → 2.5 as a
+    shim from when 3.x wasn't available on Vertex; that downgrade silently
+    served the old models on every request and has been removed.
+
+    If Vertex rejects an ID (404 / NOT_FOUND), confirm the exact string in
+    Model Garden → the model page → "View Code" and add an alias below.
+    """
+    if not model_name:
+        return "gemini-3.5-flash"
+    # Aliases for any UI label whose Vertex model ID differs go here, e.g.:
+    #   "gemini-3.1-pro": "gemini-3.1-pro-preview",
+    aliases = {}
+    return aliases.get(model_name.lower(), model_name)
+
 # ── DeepSeek Configuration ────────────────────────────────────
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-021611cb3eda434c97c3be1b9954127c")
+# DeepSeek is a Vertex AI partner Model-as-a-Service. On the Google Cloud $300
+# free-trial credit it is NOT payable (the credit excludes partner MaaS models),
+# so it is intentionally left out of all routing below. The key is read from env
+# only — no hardcoded secret — for a future paid-account re-enable.
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+
+
+# ── Per-Role Model Routing ────────────────────────────────────
+# Bump whenever the routing maps below change, so cached analyses re-run.
+ROUTING_VERSION = "r1"
+
+# Tier → concrete first-party Gemini model (served via Vertex AI, credit-covered).
+# Only first-party Gemini is used: the free-trial credit covers Vertex AI Gemini
+# but NOT partner MaaS models (DeepSeek/Claude/Llama/Mistral) nor the AI Studio
+# Gemini API. Keep USE_VERTEX=true so calls bill against the credit.
+MODEL_TIERS = {
+    "reasoning": "gemini-3.1-pro",
+    "fast": "gemini-3.5-flash",
+}
+
+# Per-tier generation config. Bound to the tier and held fixed across the whole
+# fallback chain (so a reasoning agent that falls back to flash keeps its budget).
+GEN_CONFIG_BY_TIER = {
+    "reasoning": {"temperature": 0.5, "max_output_tokens": 32000, "thinking_budget": -1},
+    "fast": {"temperature": 0.25, "max_output_tokens": 6000, "thinking_budget": 0},
+}
+
+# Which tier each agent role runs on. "risk" is the tune candidate: context-heavy
+# but not deep-reasoning — kept on reasoning for safety, can move to fast later.
+ROLE_TIER = {
+    "fundamentals": "reasoning",
+    "risk": "reasoning",
+    "bull": "reasoning",
+    "bear": "reasoning",
+    "portfolio_manager": "reasoning",
+    "technical": "fast",
+    "sentiment": "fast",
+    "debate_synthesizer": "fast",
+}
+
+# Ordered model fallback per role — Gemini-only (DeepSeek excluded by trial terms).
+# Primary = the role's tier model; fallback = the sibling Gemini tier. Fallback
+# fires only on transport/empty/exhaustion failure, never on malformed JSON.
+FALLBACK_BY_ROLE = {
+    role: [MODEL_TIERS[tier]] + [MODEL_TIERS[t] for t in MODEL_TIERS if t != tier]
+    for role, tier in ROLE_TIER.items()
+}
 
 
 # ── Firebase Configuration ────────────────────────────────────
@@ -25,16 +94,23 @@ if firebase_config:
         cleaned = cleaned[1:-1]
     os.environ["FIREBASE_CONFIG"] = cleaned
 
+# Pin the Firebase/Firestore project explicitly. Without this, the Admin SDK
+# falls back to ADC's default project — which locally may be an unrelated
+# gcloud project (e.g. a personal default) that has no Firestore database.
+# Matches the "default" project in .firebaserc; override via env if needed.
+FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "aiforpsx")
+
 # Initialize Firebase App
 firebase_db = None
 try:
     if not firebase_admin._apps:
         cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        app_options = {"projectId": FIREBASE_PROJECT_ID}
         if cred_path and os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
-            firebase_admin.initialize_app(cred)
+            firebase_admin.initialize_app(cred, app_options)
         else:
-            firebase_admin.initialize_app()
+            firebase_admin.initialize_app(options=app_options)
     firebase_db = firestore.client()
 except Exception as e:
     print(f"[-] Failed to initialize Firebase Admin SDK: {e}")

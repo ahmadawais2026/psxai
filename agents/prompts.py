@@ -64,7 +64,8 @@ RULES:
 4. Be specific about which Pakistani sectors face regulatory or macro head-winds.
 5. Always include a confidence score from 1 (insufficient data) to 10 (high conviction).
 6. CRITICALLY: Study the multi-period financial trends (revenue growth, margin direction, debt trajectory) AND any broker research excerpts and sector/macro context provided. Reason directionally about where revenue, margins, and earnings are likely headed over the next 1-3 years.
-7. Your summary must be a DETAILED PARAGRAPH (6-8 sentences) covering: current financial state, multi-period trend, macro/sector context implications, and forward directional thesis with specific numbers cited.
+7. You will be provided with an Automated DCF intrinsic value calculation, including Base/Bull/Bear scenarios and a Sensitivity Matrix. Incorporate these quantitative outputs into your qualitative assessment. If the fallback relative valuation (EV/EBITDA/DDM) was used instead of DCF, explicitly mention why.
+8. Your summary must be a DETAILED PARAGRAPH (6-8 sentences) covering: current financial state, multi-period trend, macro/sector context implications, and forward directional thesis with specific numbers cited.
 
 ══════════════════════════════════════════════════════════
 PAKISTAN EQUITY RISK PREMIUM (ERP) FRAMEWORK
@@ -148,7 +149,12 @@ OUTPUT FORMAT — return ONLY a valid JSON object:
   "erp_context": "1-2 sentences: how Pakistan ERP / macro cycle affects this stock's valuation right now",
   "strengths": ["..."],
   "concerns": ["..."],
-  "fair_value_range": {"low": ..., "high": ...},
+  "implied_valuation_range": {"low": ..., "high": ..., "base": ..., "methodology_used": "DCF or Relative"},
+  "scenarios": {
+      "base_case": "Describe the base case assumptions and implied value",
+      "bull_case": "Describe the bull case assumptions and implied value",
+      "bear_case": "Describe the bear case assumptions and implied value"
+  },
   "forward_thesis": "3-4 sentences: where are revenue/margins/earnings trending over the next 1-2 years and why, referencing sector-specific framework",
   "key_trends": ["observed trend 1 with numbers", "observed trend 2 with numbers", "..."],
   "confidence": 1-10,
@@ -233,6 +239,7 @@ RULES:
 4. Suggest maximum position size as a percentage of portfolio. Use CVaR and volatility together for sizing.
 5. Rate overall risk from 1 (very low) to 10 (extreme).
 6. The summary must specifically mention: (a) tail risk severity from CVaR, (b) whether returns are non-normal, and (c) whether the stock is an FX beneficiary or victim based on γ.
+7. If the portfolio context indicates `sector_exposure_pct` > 20%, you MUST generate a `portfolio_overlap_warning` explicitly naming the correlated holdings. Otherwise, return null.
 
 OUTPUT FORMAT — return ONLY a valid JSON object:
 {
@@ -244,6 +251,7 @@ OUTPUT FORMAT — return ONLY a valid JSON object:
   "stop_loss_pct": ...,
   "key_risks": ["..."],
   "mitigants": ["..."],
+  "portfolio_overlap_warning": "Warning text if sector concentration > 20%, else null",
   "confidence": 1-10,
   "summary": "2-3 sentence human-readable conclusion"
 }"""

@@ -39,6 +39,7 @@ class SentimentAnalystAgent(BaseAgent):
         super().__init__(
             name="Sentiment Analyst",
             persona=SENTIMENT_ANALYST_PERSONA,
+            role="sentiment",
         )
 
     def analyze(self, symbol: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -90,7 +91,7 @@ class SentimentAnalystAgent(BaseAgent):
                 "articles": []
             }
 
-        data_blob = self._build_data_blob(symbol, unique_articles, research_reports)
+        data_blob = self._build_data_blob(symbol, unique_articles, ctx)
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(data=data_blob)
 
         # ── Step 3: LLM Query with Anti-Hallucination Loop ────────
@@ -174,10 +175,19 @@ class SentimentAnalystAgent(BaseAgent):
         )
         return report
 
-    def _build_data_blob(self, symbol: str, articles: List[Dict[str, Any]],
-                         research_reports: Optional[List[str]] = None) -> str:
+    def _build_data_blob(self, symbol: str, articles: List[Dict[str, Any]], context: Dict[str, Any]) -> str:
         """Format news articles and broker reports into a readable text block."""
         lines = [f"SYMBOL: {symbol}", ""]
+        
+        retail = context.get("retail_sentiment") or {}
+        if retail:
+            lines.extend([
+                "── RETAIL SENTIMENT (REDDIT & GOOGLE TRENDS) ──",
+                f"  Reddit Score: {retail.get('reddit', {}).get('sentiment_score', 'N/A')}",
+                f"  Google Trends Attention: {retail.get('google_trends', {}).get('signal', 'N/A')}",
+                f"  Combined Retail Label: {retail.get('combined_label', 'N/A')}",
+                ""
+            ])
 
         if articles:
             lines.append("── COMPANY NEWS & ANNOUNCEMENTS ──")
@@ -194,11 +204,15 @@ class SentimentAnalystAgent(BaseAgent):
                     lines.append(f"       {str(body).strip()[:600]}")
                 lines.append("")
 
+        research_reports = context.get("research_reports", [])
         if research_reports:
             lines.append("── BROKER RESEARCH REPORTS ──")
             for report in research_reports:
-                lines.append(report)
-                lines.append("")
+                if isinstance(report, str):
+                    lines.append(report)
+                    lines.append("")
+                else:
+                    lines.append(str(report))
 
         return "\n".join(lines)
 

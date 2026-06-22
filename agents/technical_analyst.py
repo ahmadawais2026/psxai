@@ -25,6 +25,7 @@ class TechnicalAnalystAgent(BaseAgent):
         super().__init__(
             name="Technical Analyst",
             persona=TECHNICAL_ANALYST_PERSONA,
+            role="technical",
         )
 
     # ── Public API ────────────────────────────────────────────────
@@ -164,6 +165,18 @@ class TechnicalAnalystAgent(BaseAgent):
             ctx_text = format_market_context_text(context.get("market_context", {}))
             if ctx_text:
                 lines.extend(["", "── BROADER MARKET CONTEXT ──", ctx_text])
+                
+            # Add Institutional FIPI/LIPI flows for momentum context
+            flows = context.get("institutional_flows") or {}
+            fipi_lipi = flows.get("fipi_lipi") or {}
+            if fipi_lipi:
+                lines.extend([
+                    "",
+                    "── INSTITUTIONAL FLOWS (FIPI/LIPI) ──",
+                    f"  Foreign Institutional (FIPI): {fipi_lipi.get('fipi_net_usd_mn', 'N/A')} USD Mn",
+                    f"  Local Institutional (LIPI): {fipi_lipi.get('lipi_net_usd_mn', 'N/A')} USD Mn",
+                    f"  Flow Signal: {fipi_lipi.get('flow_signal', 'N/A')}"
+                ])
 
         return "\n".join(lines)
 

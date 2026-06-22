@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── API BASE URL ─────────────────────────────────────────────────
     const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
         ? ''
-        : 'https://api-gu36tcyboa-uc.a.run.app';
+        : 'https://api-hnc5e4rdta-uc.a.run.app';
 
     // ── STATE ────────────────────────────────────────────────────────
     let currentTicker = '';
@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let portfolio = [];
     let currentTheme = 'dark';
     let currentReport = null;   // stores the full analysis report for PDF download
-    let selectedModel = localStorage.getItem('psx_selected_model') || 'deepseek-v4-pro';
+    let isAnalyzing = false;    // tracks if an analysis is currently streaming
 
     // ── DOM ELEMENTS ─────────────────────────────────────────────────
     // Theme Toggle
@@ -42,7 +42,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
     const recentSearchesContainer = document.getElementById('recent-searches');
     const recentList = document.getElementById('recent-list');
-    const modelSelect = document.getElementById('model-select');
 
     // Main Analysis Views
     const analysisSection = document.getElementById('analysis-section');
@@ -138,6 +137,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btnGoogleAuth = document.getElementById('btn-google-auth');
     const btnAuthSignout = document.getElementById('btn-auth-signout');
 
+    // Visual Heuristics
+    const visualHeuristicsSection = document.getElementById('visual-heuristics-section');
+    const radarChartCanvas = document.getElementById('radar-chart');
+    const sliderWacc = document.getElementById('slider-wacc');
+    const sliderGrowth = document.getElementById('slider-growth');
+    const valWacc = document.getElementById('val-wacc');
+    const valGrowth = document.getElementById('val-growth');
+    const dcfIntrinsicBadge = document.getElementById('dcf-intrinsic-badge');
+    const dcfMatrixContainer = document.getElementById('dcf-matrix-container');
+
+    let currentRadarChart = null; // Store chart instance
     // Auth Form State
     let authMode = 'login'; // 'login' or 'signup'
 
@@ -160,9 +170,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function initApp() {
         initTheme();
-        await initFirebase();
         setupEventListeners();
+        await initFirebase();
+        checkAuthOnLoad();
         renderRecentSearches();
+
+        // ── PREVENT ACCIDENTAL REFRESH DURING ANALYSIS ─────────────
+        window.addEventListener('beforeunload', (e) => {
+            if (isAnalyzing) {
+                // Most modern browsers ignore custom messages, but require returnValue to be set
+                const msg = 'Analysis is currently running. If you leave, the process will be interrupted.';
+                e.preventDefault();
+                e.returnValue = msg;
+                return msg;
+            }
+        });
     }
 
     // ── THEME FUNCTIONS ──────────────────────────────────────────────
@@ -199,9 +221,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Fallback for local emulator environment or standalone testing
             firebase.initializeApp({
                 apiKey: "mock-api-key",
-                authDomain: "stocks-psx.firebaseapp.com",
-                projectId: "stocks-psx",
-                storageBucket: "stocks-psx.appspot.com",
+                authDomain: "aiforpsx.firebaseapp.com",
+                projectId: "aiforpsx",
+                storageBucket: "aiforpsx.appspot.com",
                 messagingSenderId: "12345678",
                 appId: "1:12345678:web:12345678"
             });
@@ -300,15 +322,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Retry button
         btnRetry.addEventListener('click', () => triggerAnalysis(currentTicker));
-
-        // Model selector change listener
-        if (modelSelect) {
-            modelSelect.value = selectedModel;
-            modelSelect.addEventListener('change', (e) => {
-                selectedModel = e.target.value;
-                localStorage.setItem('psx_selected_model', selectedModel);
-            });
-        }
 
         // Collapsible Add Holding Form
         btnToggleAddForm.addEventListener('click', toggleAddHoldingForm);
@@ -866,6 +879,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ── RUN ANALYSIS PIPELINE ────────────────────────────────────────
     async function triggerAnalysis(symbol) {
+        if (isAnalyzing) return; // Prevent concurrent requests
+        
         symbol = symbol.trim().toUpperCase();
         if (!symbol) return;
 
@@ -875,6 +890,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Prep UI for loading
         showLoadingState();
+        isAnalyzing = true;
 
         try {
             // Reset steps to pending
@@ -900,8 +916,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 headers: headers,
                 body: JSON.stringify({
                     symbol: symbol,
-                    include_portfolio: true,
-                    model: selectedModel
+                    include_portfolio: true
                 })
             });
 
@@ -986,6 +1001,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err) {
             console.error('Analysis failed:', err);
             showErrorState(err.message || 'An unexpected error occurred. Rate limits may have been hit.');
+        } finally {
+            isAnalyzing = false;
         }
     }
 
@@ -1080,6 +1097,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         skeletonGrid.setAttribute('hidden', '');
         quoteCard.removeAttribute('hidden');
         agentsGrid.removeAttribute('hidden');
+        visualHeuristicsSection.removeAttribute('hidden');
         debateSection.removeAttribute('hidden');
         verdictSection.removeAttribute('hidden');
         if (reportDownloadBar) reportDownloadBar.removeAttribute('hidden');
@@ -1104,10 +1122,192 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 7. Render Final Recommendation Verdict
         renderVerdict(report.recommendation);
+
+        // 8. Render Visual Heuristics & DCF
+        renderVisualHeuristics(report);
     }
 
     // ── VIEW RENDERING HELPERS ───────────────────────────────────────
     
+    function renderVisualHeuristics(report) {
+        if (!report) return;
+
+        // 1. Radar Chart
+        // We will assign a score 1-10 for each pillar based on the verdict/trend
+        let techScore = 5;
+        let fundScore = 5;
+        let sentScore = 5;
+        let riskScore = 5;
+
+        // Technical
+        const tTrend = report.technical_report?.trend?.toUpperCase() || '';
+        if (tTrend === 'BULLISH') techScore = 8;
+        else if (tTrend === 'BEARISH') techScore = 3;
+        else if (tTrend === 'STRONG BULLISH') techScore = 10;
+        else if (tTrend === 'STRONG BEARISH') techScore = 1;
+
+        // Fundamental
+        const fVerd = report.fundamental_report?.verdict?.toUpperCase() || '';
+        if (fVerd === 'UNDERVALUED') fundScore = 8;
+        else if (fVerd === 'OVERVALUED') fundScore = 3;
+        else if (fVerd === 'STRONGLY UNDERVALUED') fundScore = 10;
+        else if (fVerd === 'STRONGLY OVERVALUED') fundScore = 1;
+
+        // Sentiment
+        const sVerd = report.sentiment_report?.sentiment_verdict?.toUpperCase() || '';
+        if (sVerd === 'BULLISH') sentScore = 8;
+        else if (sVerd === 'BEARISH') sentScore = 3;
+        else if (sVerd === 'EXTREMELY BULLISH') sentScore = 10;
+        else if (sVerd === 'PANIC/OVERSOLD') sentScore = 2;
+        else if (sVerd === 'EUPHORIA') sentScore = 9;
+
+        // Risk (Inverse scale: High risk = low score)
+        const rVerd = report.risk_report?.risk_level?.toUpperCase() || '';
+        if (rVerd === 'LOW') riskScore = 9;
+        else if (rVerd === 'MODERATE') riskScore = 6;
+        else if (rVerd === 'HIGH') riskScore = 3;
+        else if (rVerd === 'EXTREME') riskScore = 1;
+
+        if (currentRadarChart) {
+            currentRadarChart.destroy();
+        }
+
+        const ctx = radarChartCanvas.getContext('2d');
+        currentRadarChart = new Chart(ctx, {
+            type: 'radar',
+            data: {
+                labels: ['Technical', 'Fundamental', 'Sentiment', 'Risk (Safety)'],
+                datasets: [{
+                    label: 'Pillar Scores (1-10)',
+                    data: [techScore, fundScore, sentScore, riskScore],
+                    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                    borderColor: '#10b981',
+                    pointBackgroundColor: '#10b981',
+                    pointBorderColor: '#fff',
+                    pointHoverBackgroundColor: '#fff',
+                    pointHoverBorderColor: '#10b981',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    r: {
+                        angleLines: { color: 'rgba(255, 255, 255, 0.1)' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                        pointLabels: {
+                            color: '#94a3b8',
+                            font: { family: "'Inter', sans-serif", size: 12, weight: 600 }
+                        },
+                        ticks: {
+                            display: false,
+                            min: 0,
+                            max: 10,
+                            stepSize: 2
+                        }
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+
+        // 2. DCF Sliders
+        const dcfData = report.fundamental_report?.dcf_analysis;
+        if (dcfData && !dcfData.error) {
+            dcfIntrinsicBadge.textContent = `PKR ${formatNumberWithCommas(dcfData.intrinsic_value)}`;
+            
+            // Render the sensitivity matrix
+            renderDCFMatrix(dcfData.sensitivity_matrix, dcfData.intrinsic_value);
+
+            // Set up event listeners if not already done (we should debounce the API call)
+            sliderWacc.oninput = (e) => {
+                valWacc.textContent = `${e.target.value}%`;
+            };
+            sliderWacc.onchange = (e) => triggerDCFRecalc(report.symbol);
+
+            sliderGrowth.oninput = (e) => {
+                valGrowth.textContent = `${e.target.value}%`;
+            };
+            sliderGrowth.onchange = (e) => triggerDCFRecalc(report.symbol);
+
+        } else {
+            dcfIntrinsicBadge.textContent = "N/A";
+            dcfMatrixContainer.innerHTML = '<p class="text-muted" style="text-align: center;">DCF not applicable (Negative FCF or Missing Data).</p>';
+            sliderWacc.disabled = true;
+            sliderGrowth.disabled = true;
+        }
+    }
+
+    function renderDCFMatrix(matrix, baseValue) {
+        if (!matrix || !matrix.wacc_range || !matrix.growth_range) {
+            dcfMatrixContainer.innerHTML = '';
+            return;
+        }
+        
+        const waccs = matrix.wacc_range;
+        const growths = matrix.growth_range;
+        const values = matrix.values;
+
+        let html = '<table class="matrix-table"><thead><tr><th>Ke / Tg</th>';
+        for (const g of growths) {
+            html += `<th>${(g*100).toFixed(1)}%</th>`;
+        }
+        html += '</tr></thead><tbody>';
+
+        for (let i = 0; i < waccs.length; i++) {
+            html += `<tr><th>${(waccs[i]*100).toFixed(1)}%</th>`;
+            for (let j = 0; j < growths.length; j++) {
+                const val = values[i][j];
+                // Highlight the cell that matches the baseValue roughly
+                const isActive = Math.abs(val - baseValue) < 1.0 ? 'active-val' : '';
+                html += `<td class="matrix-val-cell ${isActive}">${val.toFixed(1)}</td>`;
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        dcfMatrixContainer.innerHTML = html;
+    }
+
+    async function triggerDCFRecalc(symbol) {
+        const wacc = parseFloat(sliderWacc.value) / 100.0;
+        const growth = parseFloat(sliderGrowth.value) / 100.0;
+
+        try {
+            dcfIntrinsicBadge.textContent = "Calculating...";
+            dcfMatrixContainer.style.opacity = '0.5';
+
+            const res = await fetch(`${API_BASE}/api/dcf`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ symbol, wacc, terminal_growth: growth })
+            });
+
+            if (!res.ok) throw new Error('DCF recalc failed');
+            const data = await res.json();
+            
+            dcfMatrixContainer.style.opacity = '1';
+            
+            if (data.error) {
+                dcfIntrinsicBadge.textContent = "Error";
+                return;
+            }
+
+            // Update UI
+            dcfIntrinsicBadge.textContent = `PKR ${formatNumberWithCommas(data.intrinsic_value)}`;
+            renderDCFMatrix(data.sensitivity_matrix, data.intrinsic_value);
+
+        } catch (err) {
+            console.error(err);
+            dcfIntrinsicBadge.textContent = "Error";
+            dcfMatrixContainer.style.opacity = '1';
+        }
+    }
+
     function renderQuote(quote, name, sector) {
         const pnlClass = getPriceColorClass(quote.change);
         const icon = quote.change >= 0 
@@ -1415,9 +1615,27 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </div>
             </div>
         `;
+        
+        let overlapHtml = '';
+        if (report.portfolio_overlap_warning) {
+            overlapHtml = `
+                <div style="margin: 12px 0; padding: 12px; background-color: rgba(235, 87, 87, 0.1); border-left: 4px solid var(--bearish); border-radius: 4px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--bearish)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                            <line x1="12" y1="9" x2="12" y2="13"></line>
+                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                        </svg>
+                        <span style="font-weight: 700; color: var(--bearish); font-size: 0.85rem; text-transform: uppercase;">Sector Overlap Warning</span>
+                    </div>
+                    <p style="font-size: 0.8rem; color: var(--text-primary); margin: 0; line-height: 1.4;">${report.portfolio_overlap_warning}</p>
+                </div>
+            `;
+        }
 
         contentRisk.innerHTML = `
             <p class="card-narrative">${report.summary}</p>
+            ${overlapHtml}
             ${sizingHtml}
             <div>
                 <span class="card-data-label" style="font-weight: 700; display: block; margin-bottom: 4px;">Identified Risk Elements</span>

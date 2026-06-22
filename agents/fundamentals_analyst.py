@@ -13,6 +13,8 @@ from agents.base_agent import BaseAgent
 from agents.prompts import ANALYSIS_PROMPT_TEMPLATE, FUNDAMENTALS_ANALYST_PERSONA
 from data.market_data import get_fundamentals, get_financial_statements, get_quote
 from data.local_data import format_market_context_text
+from data.dcf_engine import DCFEngine
+import json
 
 
 class FundamentalsAnalystAgent(BaseAgent):
@@ -22,6 +24,7 @@ class FundamentalsAnalystAgent(BaseAgent):
         super().__init__(
             name="Fundamentals Analyst",
             persona=FUNDAMENTALS_ANALYST_PERSONA,
+            role="fundamentals",
         )
 
     def analyze(self, symbol: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -117,11 +120,130 @@ class FundamentalsAnalystAgent(BaseAgent):
             f"  Free Cash Flow: {financials.get('free_cash_flow', 'N/A')}",
         ]
 
+        # ── Automated DCF Valuations ──
+        try:
+            # Parse metrics for DCF
+            def _parse_val(val_str):
+                if not val_str or val_str == 'N/A': return 0.0
+                val_str = str(val_str).replace('PKR', '').replace('$', '').replace('%', '').strip()
+                multiplier = 1
+                if 'T' in val_str: multiplier = 1e12; val_str = val_str.replace('T', '')
+                elif 'B' in val_str: multiplier = 1e9; val_str = val_str.replace('B', '')
+                elif 'M' in val_str: multiplier = 1e6; val_str = val_str.replace('M', '')
+                elif 'K' in val_str: multiplier = 1e3; val_str = val_str.replace('K', '')
+                try: return float(val_str.strip()) * multiplier
+                except ValueError: return 0.0
+
+            fcf = _parse_val(financials.get('free_cash_flow'))
+            mcap = _parse_val(fundamentals.get('market_cap'))
+            price = quote.get('price', 0.0)
+
+            # ── Live, company-specific DCF inputs ──
+            # Beta: computed vs KSE-100 from price history (the old
+            # fundamentals['beta'] key never existed → always defaulted to 1.0).
+            from data.market_data import get_beta, compute_historical_growth
+            beta = get_beta(symbol)
+
+            # Stage-1 growth: CAGR from filed statements instead of a flat 8%.
+            hist_growth = compute_historical_growth(financials)
+
+            # Risk-free rate: SBP-sourced (T-bill / policy rate), preferring the
+            # value already in the shared macro snapshot, else a direct fetch.
+            rf_rate = None
+            macro = context.get("macro_context") or {}
+            rf_candidate = macro.get("risk_free_rate")
+            if rf_candidate is None:
+                pr = macro.get("policy_rate_pct")
+                if pr is not None:
+                    try:
+                        pr = float(pr)
+                        rf_candidate = pr / 100.0 if pr > 1.0 else pr
+                    except (TypeError, ValueError):
+                        rf_candidate = None
+            if rf_candidate is None:
+                try:
+                    from data.sbp_easydata import get_risk_free_rate
+                    rf_candidate = get_risk_free_rate()
+                except Exception:
+                    rf_candidate = None
+            if rf_candidate:
+                try:
+                    rf_rate = float(rf_candidate)
+                except (TypeError, ValueError):
+                    rf_rate = None
+
+            # Share count in MILLIONS. AskAnalyst reports shares outstanding in
+            # millions, which matches FCFE (also PKR millions), so the per-share
+            # intrinsic value comes out directly in PKR. Fall back to deriving
+            # from market_cap (stored absolute upstream) / price when missing.
+            shares = _parse_val(fundamentals.get('shares_outstanding'))  # millions
+            if shares <= 0 and price > 0 and mcap > 0:
+                shares = (mcap / price) / 1_000_000.0
+
+            if fcf > 0 and shares > 0:
+                engine = DCFEngine(risk_free_rate=rf_rate) if rf_rate else DCFEngine()
+                dcf_results = engine.generate_scenarios(
+                    base_fcf=fcf,
+                    levered_beta=beta,
+                    shares_outstanding=shares,
+                    historical_growth=hist_growth
+                )
+                lines.extend([
+                    "",
+                    "── AUTOMATED DCF ENGINE (FCFE) ──",
+                    f"Live inputs → Risk-free (SBP): {engine.risk_free_rate:.2%} | "
+                    f"Beta (vs KSE-100): {beta:.2f} | Historical growth (CAGR): {hist_growth:.2%} | "
+                    f"Base FCFE: {fcf:,.0f}mn | Shares: {shares:,.1f}mn",
+                    "The system has computed an intrinsic valuation based on free cash flows (FCFE).",
+                    "Review the bounded scenarios and sensitivity matrix to inform your valuation verdict.",
+                    json.dumps(dcf_results, indent=2)
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "── AUTOMATED DCF ENGINE (FCFE) ──",
+                    "[!] DCF Engine aborted: non-positive FCFE or unknown share count "
+                    "(common for banks/financials, whose cash-flow statements lack a clean FCFE).",
+                    "Fallback to Relative Valuation (EV/EBITDA, P/E, P/B) or DDM required."
+                ])
+        except Exception as e:
+            self._log(f"DCF calculation failed: {e}")
+
         # Multi-period local financials (8 quarters of trend data)
         financials_text = context.get("financials_text", "")
         if financials_text:
             lines.append("")
             lines.append(financials_text)
+
+        # Add Macro Context if available
+        macro = context.get("macro_context") or {}
+        if macro:
+            lines.extend([
+                "",
+                "── SBP MACROECONOMIC CONTEXT ──",
+            ])
+            pr = macro.get("policy_rate", {})
+            if pr:
+                lines.append(f"  Policy Rate: {pr.get('policy_rate_pct')}% (Trend: {pr.get('trend')})")
+            m2 = macro.get("m2", {})
+            if m2:
+                lines.append(f"  Broad Money M2 (PKR Bn): {m2.get('m2_pkr_bn')} (Growth: {m2.get('growth_pct')}%)")
+            fx = macro.get("fx_reserves", {})
+            if fx:
+                lines.append(f"  FX Reserves (USD Bn): {fx.get('total_reserves_usd_bn')}")
+            lines.append(f"  Signal: {macro.get('macro_signal', 'N/A')}")
+            
+        # Add Institutional MUFAP flows
+        flows = context.get("institutional_flows") or {}
+        mufap = flows.get("mufap") or {}
+        if mufap:
+            lines.extend([
+                "",
+                "── INSTITUTIONAL RISK APPETITE (MUFAP) ──",
+                f"  Equity AUM Share: {mufap.get('equity_share_pct')}%",
+                f"  Risk Appetite: {mufap.get('risk_appetite')}",
+                f"  Signal: {mufap.get('mufap_signal')}"
+            ])
 
         # Broker research reports mentioning this company or sector
         reports = context.get("research_reports", [])
@@ -129,8 +251,11 @@ class FundamentalsAnalystAgent(BaseAgent):
             lines.append("")
             lines.append("── BROKER RESEARCH REPORTS ──")
             for report in reports:
-                lines.append(report)
-                lines.append("")
+                if isinstance(report, str):
+                    lines.append(report)
+                    lines.append("")
+                else:
+                    lines.append(str(report))
 
         return "\n".join(lines)
 

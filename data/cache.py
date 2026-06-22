@@ -124,6 +124,70 @@ def get_cached(key: str, ttl_seconds: int) -> Optional[Any]:
         return None
 
 
+def sanitize_for_firestore(val: Any) -> Any:
+    """
+    Recursively sanitize Python data structures for Firestore storage.
+    Converts keys to strings, replaces dots/slashes in keys, handles NaN/Inf,
+    handles Pydantic models, and converts numpy/pandas/decimal types to native types.
+    """
+    import sys
+    # Handle numpy types if numpy is loaded
+    if "numpy" in sys.modules:
+        import numpy as np
+        if isinstance(val, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+            return int(val)
+        elif isinstance(val, (np.floating, np.float64, np.float32, np.float16)):
+            import math
+            f_val = float(val)
+            if math.isnan(f_val) or math.isinf(f_val):
+                return None
+            return f_val
+        elif isinstance(val, np.ndarray):
+            return [sanitize_for_firestore(item) for item in val.tolist()]
+        elif isinstance(val, np.bool_):
+            return bool(val)
+
+    # Handle decimal types
+    from decimal import Decimal
+    if isinstance(val, Decimal):
+        return float(val)
+
+    if isinstance(val, dict):
+        cleaned = {}
+        for k, v in val.items():
+            str_key = str(k).replace(".", "_").replace("/", "_")
+            if not str_key:
+                str_key = "empty_key"
+            cleaned[str_key] = sanitize_for_firestore(v)
+        return cleaned
+    elif isinstance(val, (list, tuple, set)):
+        return [sanitize_for_firestore(item) for item in val]
+    elif isinstance(val, float):
+        import math
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return val
+    elif hasattr(val, "dict") and callable(getattr(val, "dict")):
+        try:
+            return sanitize_for_firestore(val.dict())
+        except Exception:
+            pass
+    elif hasattr(val, "model_dump") and callable(getattr(val, "model_dump")):
+        try:
+            return sanitize_for_firestore(val.model_dump())
+        except Exception:
+            pass
+    
+    if isinstance(val, (str, int, bool)) or val is None:
+        return val
+        
+    try:
+        return str(val)
+    except Exception:
+        return None
+
+
+
 def set_cached(key: str, value: Any) -> bool:
     """
     Store a value in the Firestore cache.
@@ -140,10 +204,11 @@ def set_cached(key: str, value: Any) -> bool:
     if not _verify_credentials():
         return False
     try:
+        sanitized_value = sanitize_for_firestore(value)
         doc_id = key.replace("/", "_").replace(" ", "_")
         cache_ref.document(doc_id).set({
             "key": key,
-            "value": value,
+            "value": sanitized_value,
             "created_at": time.time()
         })
         logger.debug("Cache SET for key '%s'", key)
@@ -151,6 +216,7 @@ def set_cached(key: str, value: Any) -> bool:
     except Exception as exc:
         logger.warning("Cache write error for key '%s': %s", key, exc)
         return False
+
 
 
 def clear_expired(max_age_seconds: int = 86400 * 7) -> int:

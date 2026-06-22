@@ -1,64 +1,140 @@
 """
 data/news_data.py
 ═══════════════════════════════════════════════════════════════════════
-News fetching for PSX stocks.
-
-Uses Google News RSS scoped to local Pakistani financial outlets
-(Dawn, Business Recorder, Mettis Global, AskAnalyst).
+News fetching for PSX stocks with Advanced Tiered Sourcing, 
+WAF-Bypass (cloudscraper), In-Memory Deduplication, and LLM Entity Resolution.
 ═══════════════════════════════════════════════════════════════════════
 """
 
 from __future__ import annotations
 
 import logging
+import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any, Dict, List
-import requests
-import xml.etree.ElementTree as ET
+import cloudscraper
+import urllib.parse
+from google import genai
 
-from config import CACHE_TTL_NEWS
+from config import CACHE_TTL_NEWS, GEMINI_API_KEY, GEMINI_MODEL, USE_VERTEX, VERTEX_PROJECT, VERTEX_LOCATION, map_model_name
 from data.cache import get_cached, set_cached
+from data.psx_tickers import PSX_TICKERS
 
 logger = logging.getLogger(__name__)
 
+# WAF Bypass Scraper
+scraper = cloudscraper.create_scraper(browser={
+    'browser': 'chrome',
+    'platform': 'windows',
+    'desktop': True
+})
+
+def _jaccard_similarity(str1: str, str2: str) -> float:
+    """Calculate Jaccard Similarity between two strings (shingled words)."""
+    set1 = set(str1.lower().split())
+    set2 = set(str2.lower().split())
+    if not set1 or not set2:
+        return 0.0
+    intersection = set1.intersection(set2)
+    union = set1.union(set2)
+    return len(intersection) / len(union)
+
+def _deduplicate_articles(articles: List[Dict[str, Any]], threshold: float = 0.65) -> List[Dict[str, Any]]:
+    """Deduplicate articles based on Jaccard similarity of titles."""
+    unique_articles = []
+    for item in articles:
+        is_duplicate = False
+        title1 = item.get("title", "")
+        for existing in unique_articles:
+            title2 = existing.get("title", "")
+            if _jaccard_similarity(title1, title2) > threshold:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_articles.append(item)
+    return unique_articles
+
+def filter_news_with_llm(symbol: str, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    LLM-Powered Entity Resolution (RAG pass 1).
+    Discards articles that are generic noise and not specifically about the target entity.
+    """
+    if not articles:
+        return articles
+        
+    if not USE_VERTEX and not GEMINI_API_KEY:
+        return articles
+        
+    if USE_VERTEX:
+        client = genai.Client(
+            vertexai=True,
+            project=VERTEX_PROJECT,
+            location=VERTEX_LOCATION
+        )
+        model = map_model_name(GEMINI_MODEL)
+    else:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        model = GEMINI_MODEL
+        
+    filtered = []
+    
+    # We will process them in one batch to save time and API calls
+    prompt = f"You are a financial entity resolution engine. Filter the following news headlines for the stock '{symbol}'. Return ONLY a JSON list of indices (0-indexed) of the articles that are explicitly and genuinely about this corporate entity or its direct market sector impacts. Discard generic noise. Respond ONLY with a JSON array of integers.\n\n"
+    
+    for i, art in enumerate(articles):
+        prompt += f"[{i}] {art.get('title')}\n"
+        
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+        )
+        # Parse the JSON array from response
+        # Using a simple regex to find the list
+        match = re.search(r'\[.*?\]', response.text, re.DOTALL)
+        if match:
+            import json
+            indices = json.loads(match.group(0))
+            for i in indices:
+                if 0 <= i < len(articles):
+                    filtered.append(articles[i])
+            logger.info(f"LLM Entity Resolution filtered {len(articles)} articles down to {len(filtered)} for {symbol}")
+            return filtered
+    except Exception as e:
+        logger.error(f"LLM Entity Resolution failed for {symbol}: {e}")
+        
+    return articles # Fallback to all articles if LLM fails
+
 def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
     """
-    Fetch news articles for a stock ticker from AskAnalyst endpoints as primary,
-    and fall back/supplement with Google News RSS from local sources.
-    
-    Args:
-        symbol: Stock symbol without suffix (e.g. 'OGDC').
-        max_articles: Maximum number of articles to return.
-        
-    Returns:
-        List of news items: {title, link, published, source}
+    Fetch news articles for a stock ticker from AskAnalyst endpoints (Tier 1),
+    and fall back/supplement with Google News RSS (Tier 2/3).
+    Includes in-memory deduplication and LLM noise filtering.
     """
-    cache_key = f"news_rss:{symbol.upper()}"
+    cache_key = f"news_rss_v2:{symbol.upper()}"
     cached = get_cached(cache_key, CACHE_TTL_NEWS)
     if cached is not None:
         logger.info(f"News cache hit for {symbol}")
         return cached[:max_articles]
         
-    logger.info(f"News cache miss for {symbol}. Fetching from AskAnalyst endpoints...")
+    logger.info(f"News cache miss for {symbol}. Fetching Tier 1...")
     
-    import re
     clean_sym = symbol.strip().upper()
-    articles = []
+    raw_articles = []
     seen_titles = set()
     
-    # 1. Try to resolve AskAnalyst company ID using local PSX_TICKERS
-    from data.psx_tickers import PSX_TICKERS
     company_id = None
     company_name = ""
     if clean_sym in PSX_TICKERS:
         company_id = PSX_TICKERS[clean_sym].get("askanalyst_id")
         company_name = PSX_TICKERS[clean_sym].get("name", "")
         
-    # 2. Try company-specific news endpoint
+    # Tier 1: Try AskAnalyst endpoints via cloudscraper
     if company_id:
         try:
             url = f"https://api.askanalyst.com.pk/api/news/{company_id}"
-            r = requests.get(url, timeout=8)
+            r = scraper.get(url, timeout=8)
             if r.status_code == 200:
                 news_data = r.json()
                 items = news_data.get("data", []) if isinstance(news_data, dict) else []
@@ -66,27 +142,26 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
                     title = item.get("title", "").strip()
                     if title and title not in seen_titles:
                         seen_titles.add(title)
-                        articles.append({
+                        raw_articles.append({
                             "title": title,
                             "link": item.get("link") or f"https://www.askanalyst.com.pk/company/{company_id}",
                             "published": item.get("created_at") or item.get("date") or "",
                             "source": "AskAnalyst"
                         })
         except Exception as e:
-            logger.warning(f"Failed to fetch company news from AskAnalyst: {e}")
+            logger.warning(f"Tier 1 AskAnalyst company fetch failed: {e}")
             
-    # 3. Try market-wide news /news/all and filter for mentions of the symbol or company name
+    # Tier 2: AskAnalyst All News filtering
     try:
         url = "https://api.askanalyst.com.pk/api/news/all"
         params = {"page": 1, "postsperpage": 100}
-        r = requests.get(url, params=params, timeout=8)
+        r = scraper.get(url, params=params, timeout=8)
         if r.status_code == 200:
             news_data = r.json()
             items = news_data.get("data", []) if isinstance(news_data, dict) else []
             for item in items:
                 title = item.get("title", "")
                 desc = item.get("description", "")
-                # check if symbol or parts of the name are mentioned
                 match = False
                 if re.search(rf"\b{clean_sym}\b", title, re.IGNORECASE) or re.search(rf"\b{clean_sym}\b", desc, re.IGNORECASE):
                     match = True
@@ -100,32 +175,29 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
                     title_clean = title.strip()
                     if title_clean and title_clean not in seen_titles:
                         seen_titles.add(title_clean)
-                        articles.append({
+                        raw_articles.append({
                             "title": title_clean,
                             "link": item.get("link") or "https://www.askanalyst.com.pk/news",
                             "published": item.get("created_at") or item.get("date") or "",
                             "source": "AskAnalyst"
                         })
     except Exception as e:
-        logger.warning(f"Failed to fetch market news from AskAnalyst: {e}")
+        logger.warning(f"Tier 2 AskAnalyst market news failed: {e}")
         
-    # 4. Fallback/Supplement with Google News RSS if we don't have enough articles
-    if len(articles) < max_articles:
-        logger.info(f"Only found {len(articles)} articles on AskAnalyst. Supplementing with RSS...")
-        query = f'"{clean_sym}" (site:dawn.com OR site:brecorder.com OR site:mettisglobal.news OR site:askanalyst.com.pk)'
-        rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}"
+    # Tier 3: Google News RSS via cloudscraper
+    if len(raw_articles) < max_articles:
+        logger.info(f"Supplementing with Google News RSS Tier 3...")
+        query = f'"{clean_sym}" (site:dawn.com OR site:brecorder.com OR site:mettisglobal.news OR site:profit.pakistantoday.com.pk OR site:tribune.com.pk)'
+        rss_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.get(rss_url, headers=headers, timeout=10)
+            response = scraper.get(rss_url, timeout=10)
             if response.status_code == 200:
                 root = ET.fromstring(response.content)
                 for item in root.findall('./channel/item'):
                     title = item.find('title').text if item.find('title') is not None else ""
                     link = item.find('link').text if item.find('link') is not None else ""
                     pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
-                    source = item.find('source').text if item.find('source') is not None else "Unknown Source"
+                    source = item.find('source').text if item.find('source') is not None else "Google News"
                     
                     clean_title = title.strip()
                     if not clean_title or clean_title in seen_titles:
@@ -139,18 +211,23 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
                     except Exception:
                         pass
                         
-                    articles.append({
+                    raw_articles.append({
                         "title": clean_title,
                         "link": link,
                         "published": published_str,
                         "source": source
                     })
-                    if len(articles) >= max_articles * 2:
-                        break
         except Exception as e:
-            logger.error(f"Error fetching news for {clean_sym} via RSS fallback: {e}")
+            logger.error(f"Tier 3 Google News RSS failed for {clean_sym}: {e}")
             
+    # Apply Deduplication Pipeline
+    deduped_articles = _deduplicate_articles(raw_articles)
+    
+    # Apply LLM Entity Resolution (Noise Filtering)
+    # We only pass top 20 to LLM to save tokens
+    final_articles = filter_news_with_llm(symbol, deduped_articles[:20])
+    
     # Truncate and cache
-    articles = articles[:max_articles]
-    set_cached(cache_key, articles)
-    return articles
+    final_articles = final_articles[:max_articles]
+    set_cached(cache_key, final_articles)
+    return final_articles

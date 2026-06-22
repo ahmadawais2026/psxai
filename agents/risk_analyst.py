@@ -63,6 +63,7 @@ class RiskAnalystAgent(BaseAgent):
         super().__init__(
             name="Risk Analyst",
             persona=RISK_ANALYST_PERSONA,
+            role="risk",
         )
 
     def analyze(self, symbol: str, portfolio_context: Optional[Dict[str, Any]] = None,
@@ -87,9 +88,11 @@ class RiskAnalystAgent(BaseAgent):
             return self._error_report(symbol, "No historical data to compute risk metrics.")
         self._log(f"Fetched stock history ({len(stock_df)} bars).")
 
-        # KSE-100 index — try two symbols, stop at first hit
+        # KSE-100 index — use PSX DPS native ticker (dps.psx.com.pk/timeseries/eod/KSE100)
+        # Note: ^KSE and KSE100.KA are Yahoo Finance tickers which no longer return data.
+        # The correct PSX Data Portal symbol is simply 'KSE100'.
         index_df = None
-        for idx_sym in ["^KSE", "KSE100.KA"]:
+        for idx_sym in ["KSE100", "^KSE"]:
             result = _fetch_with_timeout(
                 get_history, idx_sym, HISTORY_PERIOD_DAILY, "1d",
                 label=f"index_history:{idx_sym}"
@@ -343,8 +346,21 @@ class RiskAnalystAgent(BaseAgent):
                 f"  Current Holding Value       : {portfolio_context.get('current_value', 0.0)}",
                 f"  Portfolio Concentration     : {portfolio_context.get('portfolio_pct', 0.0):.2f}%",
                 f"  Concentration Danger (>15%) : {portfolio_context.get('is_concentrated', False)}",
-                ""
             ])
+            
+            target_sector = portfolio_context.get("target_sector", "N/A")
+            if target_sector != "N/A":
+                sector_pct = portfolio_context.get("sector_exposure_pct", 0.0)
+                correlated = portfolio_context.get("correlated_holdings", [])
+                corr_str = ", ".join([f"{h['symbol']} ({h['allocation_pct']:.1f}%)" for h in correlated]) if correlated else "None"
+                
+                lines.extend([
+                    f"  Target Sector               : {target_sector}",
+                    f"  Sector Exposure             : {sector_pct:.2f}%",
+                    f"  Correlated Holdings         : {corr_str}",
+                ])
+                
+            lines.append("")
         else:
             lines.extend([
                 "══ USER PORTFOLIO CONTEXT ══",

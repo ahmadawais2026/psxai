@@ -2266,49 +2266,6 @@ body {
     to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ─── Model Selection Dropdown ────────────────────────────── */
-.model-select-container {
-    margin-right: 8px;
-    border-left: 1px solid var(--border-subtle);
-    padding-left: 12px;
-    display: flex;
-    align-items: center;
-    height: 32px;
-}
-
-.model-select {
-    background: none;
-    border: none;
-    outline: none;
-    color: var(--text-primary);
-    font-family: var(--font-body);
-    font-size: 0.85rem;
-    font-weight: 500;
-    cursor: pointer;
-    padding: 6px 28px 6px 8px;
-    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-    background-repeat: no-repeat;
-    background-position: right 6px center;
-    background-size: 14px;
-    appearance: none;
-    -webkit-appearance: none;
-    transition: color var(--duration-fast);
-    max-width: 180px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    overflow: hidden;
-}
-
-.model-select:focus {
-    color: var(--accent-start);
-}
-
-.model-select option {
-    background-color: #0f172a;
-    color: var(--text-primary);
-}
-
-
 /* ═══════════════════════════════════════════════════════════════
    RESPONSIVE BREAKPOINTS & ADJUSTMENTS
    ═══════════════════════════════════════════════════════════════ */
@@ -2327,18 +2284,6 @@ body {
     .verdict-card { padding: 20px; }
     .portfolio-panel { padding: 20px; }
     .portfolio-stats-grid { grid-template-columns: 1fr; }
-    
-    .model-select-container {
-        padding-left: 6px;
-        margin-right: 4px;
-    }
-    
-    .model-select {
-        max-width: 105px;
-        font-size: 0.78rem;
-        padding-right: 20px;
-        background-position: right 2px center;
-    }
 }
 
 @media (max-width: 380px) {
@@ -2347,3 +2292,115 @@ body {
     .tagline { display: none !important; }
 }
 
+
+/* ─── Visual Heuristics & DCF Section ───────────────────────── */
+.heuristics-section {
+    margin-top: 3rem;
+    animation: slideUp 0.6s var(--ease-out) forwards;
+}
+
+.heuristics-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+}
+
+@media (min-width: 900px) {
+    .heuristics-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.dcf-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.slider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.slider-group label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.slider-val {
+    color: var(--accent-end);
+    font-family: var(--font-data);
+}
+
+/* Custom Range Slider */
+input[type=range].slider {
+    -webkit-appearance: none;
+    width: 100%;
+    background: transparent;
+}
+
+input[type=range].slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 18px;
+    width: 18px;
+    border-radius: 50%;
+    background: var(--accent-start);
+    cursor: pointer;
+    margin-top: -6px;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+input[type=range].slider::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 6px;
+    cursor: pointer;
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    border: 1px solid var(--border-default);
+}
+
+input[type=range].slider:focus {
+    outline: none;
+}
+
+.matrix-container {
+    margin-top: 1rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: 1rem;
+    overflow-x: auto;
+}
+
+.matrix-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-data);
+    font-size: 0.85rem;
+    text-align: center;
+}
+
+.matrix-table th, .matrix-table td {
+    padding: 0.5rem;
+    border: 1px solid var(--border-default);
+}
+
+.matrix-table th {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.matrix-val-cell {
+    color: var(--text-primary);
+}
+
+.matrix-val-cell.active-val {
+    background: var(--bullish-dim);
+    color: var(--bullish);
+    font-weight: 700;
+    border-color: var(--bullish-glow);
+}

@@ -206,7 +206,22 @@ def _parse_firestore_financials_to_highlights(data: Dict[str, Any], symbol: str)
     cash = get_metric_value("balance_sheet", ["cash & bank balances", "cash and balances with treasury banks", "cash and cash equivalents"])
     
     operating_cash_flow = get_metric_value("cash_flow", ["operating cash flow", "net cash generated from operating activities", "cash flow from operating activities"])
-    free_cash_flow = get_metric_value("cash_flow", ["free cash flow"])
+
+    # Free cash flow for the DCF. The engine is a 2-stage FCFE model, and the
+    # AskAnalyst cash-flow statement carries an explicit FCFE line — prefer it.
+    # Fall back to FCFF, an explicit "free cash flow" line, or a derivation:
+    # FCFE = Operating Cash Flow + CAPEX + Net Borrowings (CAPEX is stored as a
+    # negative outflow, so it is added). Verified to reproduce the FCFE line
+    # exactly (e.g. ABOT 9978 - 3273 + 435 = 7140).
+    free_cash_flow = get_metric_value("cash_flow", ["fcfe"])
+    if not free_cash_flow:
+        free_cash_flow = get_metric_value("cash_flow", ["fcff"])
+    if not free_cash_flow:
+        free_cash_flow = get_metric_value("cash_flow", ["free cash flow"])
+    if not free_cash_flow and operating_cash_flow:
+        capex = get_metric_value("cash_flow", ["capex", "capital expenditure", "purchase of property", "additions to fixed assets", "purchase of fixed assets"])
+        net_borrowings = get_metric_value("cash_flow", ["net borrowings", "net borrowing"])
+        free_cash_flow = operating_cash_flow + (capex or 0.0) + (net_borrowings or 0.0)
     
     roe = get_metric_value("income_statement", ["return on equity", "roe"])
     if roe == 0.0:
@@ -236,6 +251,161 @@ def _parse_firestore_financials_to_highlights(data: Dict[str, Any], symbol: str)
     
     return result
 
+
+# ── DCF Input Helpers (beta & historical growth) ──────────────────────
+
+
+def get_beta(symbol: str) -> float:
+    """
+    Compute the equity beta of *symbol* against the KSE-100 index from
+    daily price history (covariance of returns / market variance).
+
+    Mirrors the Risk Analyst's calculation but lives in the data layer so
+    the Fundamentals Analyst's DCF can obtain a real beta without depending
+    on agent execution order (both agents run in parallel).
+
+    Cached for ``CACHE_TTL_FUNDAMENTALS``. Returns 1.0 when history is
+    insufficient or unavailable.
+    """
+    local = _local_symbol(symbol)
+    cache_key = f"beta:{local}"
+    cached = get_cached(cache_key, CACHE_TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    beta = 1.0
+    try:
+        import numpy as np
+
+        stock_df = get_history(symbol, HISTORY_PERIOD_DAILY, "1d")
+        if stock_df is None or stock_df.empty:
+            return beta
+
+        index_df = None
+        for idx_sym in ("KSE100", "^KSE"):
+            result = get_history(idx_sym, HISTORY_PERIOD_DAILY, "1d")
+            if result is not None and not result.empty:
+                index_df = result
+                break
+
+        if index_df is not None and not index_df.empty:
+            combined = pd.DataFrame(
+                {"stock": stock_df["Close"], "index": index_df["Close"]}
+            ).dropna().pct_change().dropna()
+            if len(combined) > 10:
+                cov = np.cov(combined["stock"], combined["index"])
+                market_var = cov[1, 1]
+                if market_var > 0:
+                    beta = float(cov[0, 1] / market_var)
+    except Exception as e:
+        logger.warning("Beta computation failed for %s: %s", local, e)
+        return 1.0
+
+    set_cached(cache_key, beta)
+    return beta
+
+
+def _metric_series(statement: Any, synonyms: List[str]) -> List[tuple]:
+    """Return ``[(period_datetime, value), ...]`` sorted ascending for the first
+    metric matching *synonyms*. Handles both statement shapes returned by
+    ``get_financial_statements``: the Firestore list-of-rows format and the
+    AskAnalyst ``{period: {metric: value}}`` dict format."""
+    import numpy as np
+
+    series: List[tuple] = []
+    skip_keys = {"Metric", "Unit", "symbol", "period", "last_updated"}
+
+    if isinstance(statement, list):
+        target = None
+        for row in statement:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("Metric", "")).strip().lower()
+            if any(syn in name for syn in synonyms):
+                target = row
+                break
+        if target is None:
+            return []
+        for k, v in target.items():
+            if k in skip_keys:
+                continue
+            dt = _parse_period_key(k)
+            if dt is None:
+                continue
+            try:
+                val = float(v)
+                if np.isnan(val):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            series.append((dt, val))
+
+    elif isinstance(statement, dict):
+        for period, metrics in statement.items():
+            if not isinstance(metrics, dict):
+                continue
+            dt = _parse_period_key(period)
+            if dt is None:
+                continue
+            for metric_name, v in metrics.items():
+                if any(syn in str(metric_name).strip().lower() for syn in synonyms):
+                    try:
+                        val = float(v)
+                        if np.isnan(val):
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                    series.append((dt, val))
+                    break
+
+    series.sort(key=lambda x: x[0])
+    return series
+
+
+def compute_historical_growth(
+    financials: Dict[str, Any],
+    default: float = 0.08,
+    cap: float = 0.30,
+    floor: float = -0.10,
+) -> float:
+    """
+    Estimate a normalized historical growth rate (decimal) from filed
+    financial statements, for use as the Stage-1 DCF growth assumption.
+
+    Tries Free Cash Flow → Operating Cash Flow → Net Income → Revenue, using
+    the first metric with at least two clean, positive-endpoint periods, and
+    computes a CAGR across them. The result is clamped to ``[floor, cap]`` to
+    keep the DCF guardrails intact. Falls back to *default* when no usable
+    series exists.
+    """
+    if not isinstance(financials, dict):
+        return default
+
+    candidates = [
+        ("cash_flow", ["free cash flow"]),
+        ("cash_flow", ["operating cash flow", "net cash generated from operating", "cash flow from operating"]),
+        ("income_statement", ["profit after tax", "net income", "net profit", "profit for the period"]),
+        ("income_statement", ["total revenue", "net sales", "markup/interest revenue", "mark-up/interest revenue"]),
+    ]
+
+    for stmt_name, synonyms in candidates:
+        synonyms = [s.lower() for s in synonyms]
+        series = _metric_series(financials.get(stmt_name, []), synonyms)
+        if len(series) < 2:
+            continue
+        first_val = series[0][1]
+        last_val = series[-1][1]
+        if first_val <= 0 or last_val <= 0:
+            continue
+        # Annualize over the actual elapsed time, not the number of data points
+        # (periods can be unevenly spaced or quarterly), then clamp.
+        years = (series[-1][0] - series[0][0]).days / 365.25
+        if years < 0.5:
+            continue
+        cagr = (last_val / first_val) ** (1.0 / years) - 1.0
+        return max(floor, min(cap, cagr))
+
+    return default
 
 
 # ── Quote ────────────────────────────────────────────────────────────
@@ -468,10 +638,21 @@ def get_history(
             except Exception as p_exc:
                 logger.warning("PSX EOD history failed for %s: %s, trying Yahoo REST fallback", local, p_exc)
 
-        # Fallback to Yahoo REST API
+        # Fallback 1: Yahoo REST API
         res = _fetch_yahoo_chart_rest(_yahoo_symbol(symbol), range_str=period, interval_str=interval)
         if not res or not res.get("chart", {}).get("result"):
-            logger.warning("No history data for %s (period=%s, interval=%s)", local, period, interval)
+            # Fallback 2: AskAnalyst chart endpoint
+            range_map = {"1mo": "1M", "3mo": "3M", "6mo": "6M", "1y": "1Y", "2y": "3Y", "5y": "5Y"}
+            ask_range = range_map.get(period, "1Y")
+            df_ask = get_askanalyst_history(local, range_str=ask_range, interval="1D")
+            if not df_ask.empty:
+                logger.info("Got %d bars from AskAnalyst chart for %s", len(df_ask), local)
+                df_reset = df_ask.reset_index()
+                if "Date" in df_reset.columns:
+                    df_reset["Date"] = df_reset["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                set_cached(cache_key, df_reset.to_dict(orient="records"))
+                return df_ask
+            logger.warning("No history data for %s (period=%s, interval=%s) from PSX DPS, Yahoo, or AskAnalyst", local, period, interval)
             return pd.DataFrame()
 
         result = res["chart"]["result"][0]
@@ -613,6 +794,8 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                     "revenue":              highlights.get("revenue"),
                     "net_income":           highlights.get("net_income"),
                     "book_value":           book_value,
+                    "shares_outstanding":   shares_outstanding,  # absolute share count (for DCF unit consistency)
+                    "free_cash_flow":       highlights.get("free_cash_flow"),
                     "currency":             "PKR",
                 }
                 
@@ -649,19 +832,36 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 pb_ratio = float(pb_val) if pb_val and pb_val != "None" else None
                 dividend_yield = float(dy_val) if dy_val and dy_val != "None" else None
                 
+                # Enrich with /api/ratios and /api/equity-profile
+                ratios = get_valuation_ratios(local)
+                equity_prof = get_equity_profile(local)
+                consensus = get_analyst_consensus(local)
+
+                eps = ratios.get("eps") or (float(info.get("eps") or 0.0) or None)
+                roe = ratios.get("roe") or None
+                dps = ratios.get("dps")
+                ev_ebitda = ratios.get("ev_ebitda")
+                free_float_pct = equity_prof.get("free_float_pct")
+
                 fundamentals = {
                     "symbol":               local,
                     "name":                 name,
                     "sector":               sector,
                     "industry":             "N/A",
-                    "pe_ratio":             pe_ratio,
-                    "pb_ratio":             pb_ratio,
-                    "dividend_yield":       dividend_yield,
-                    "eps":                  None,
-                    "roe":                  None,
+                    "pe_ratio":             pe_ratio or ratios.get("pe"),
+                    "pb_ratio":             pb_ratio or ratios.get("pb"),
+                    "dividend_yield":       dividend_yield or ratios.get("dividend_yield"),
+                    "ev_ebitda":            ev_ebitda,
+                    "eps":                  eps,
+                    "dps":                  dps,
+                    "roe":                  roe,
                     "book_value":           None,
                     "shares_outstanding":   float(info.get("shares") or 0.0),
                     "market_cap":           float(info.get("market_cap") or 0.0) * 1_000_000,
+                    "free_float_pct":       free_float_pct,
+                    "analyst_recommendation": consensus.get("recommendation"),
+                    "analyst_target_price": consensus.get("target_price_pkr"),
+                    "analyst_upside":       consensus.get("upside_potential"),
                     "currency":             "PKR",
                 }
                 
@@ -803,6 +1003,275 @@ def get_financial_statements(symbol: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.error("Error fetching financial statements for %s: %s", local, exc)
         return {"symbol": local, "error": str(exc)}
+
+
+# ── Valuation Ratios (AskAnalyst /api/ratios/{id}) ──────────────────
+
+
+def get_valuation_ratios(symbol: str) -> Dict[str, Any]:
+    """
+    Fetch valuation multiples and per-share metrics from AskAnalyst.
+
+    Endpoint: GET /api/ratios/{company_id}
+
+    Returns dict with keys: pe, pb, ev_ebitda, dividend_yield, eps, dps,
+    price_to_sales, roa, roe, current_ratio.
+    Returns empty dict on failure.
+    """
+    local = _local_symbol(symbol)
+    cache_key = f"ratios:{local}"
+    cached = get_cached(cache_key, CACHE_TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    ask_id = _get_askanalyst_id(local)
+    if not ask_id:
+        return {}
+
+    for endpoint in [f"https://api.askanalyst.com.pk/api/ratios/{ask_id}",
+                     f"https://api.askanalyst.com.pk/api/valuation/{ask_id}"]:
+        try:
+            r = requests.get(endpoint, timeout=8)
+            if r.status_code == 200:
+                raw = r.json()
+                if isinstance(raw, dict) and raw:
+                    def _f(v):
+                        try:
+                            return float(v) if v is not None and v != "None" else None
+                        except (TypeError, ValueError):
+                            return None
+
+                    result = {
+                        "pe":             _f(raw.get("pe") or raw.get("per")),
+                        "pb":             _f(raw.get("pbv") or raw.get("pb")),
+                        "ev_ebitda":      _f(raw.get("ev_ebitda")),
+                        "dividend_yield": _f(raw.get("dividend_yield") or raw.get("dy")),
+                        "eps":            _f(raw.get("eps")),
+                        "dps":            _f(raw.get("dps")),
+                        "price_to_sales": _f(raw.get("ps") or raw.get("price_to_sales")),
+                        "roa":            _f(raw.get("roa")),
+                        "roe":            _f(raw.get("roe")),
+                        "current_ratio":  _f(raw.get("current_ratio")),
+                    }
+                    set_cached(cache_key, result)
+                    return result
+        except Exception as e:
+            logger.debug("Ratios fetch failed for %s at %s: %s", local, endpoint, e)
+
+    return {}
+
+
+# ── Equity Profile / Free Float (AskAnalyst /api/equity-profile/{id}) ─
+
+
+def get_equity_profile(symbol: str) -> Dict[str, Any]:
+    """
+    Fetch shareholding structure and free float data from AskAnalyst.
+
+    Endpoint: GET /api/equity-profile/{company_id}
+
+    Returns dict with keys: market_cap_mn, total_shares_mn, free_float_mn,
+    free_float_pct, paid_up_capital.
+    Returns empty dict on failure.
+    """
+    local = _local_symbol(symbol)
+    cache_key = f"equity_profile:{local}"
+    cached = get_cached(cache_key, CACHE_TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    ask_id = _get_askanalyst_id(local)
+    if not ask_id:
+        return {}
+
+    try:
+        r = requests.get(
+            f"https://api.askanalyst.com.pk/api/equity-profile/{ask_id}",
+            timeout=8
+        )
+        if r.status_code == 200:
+            raw = r.json()
+            if isinstance(raw, dict) and raw:
+                def _f(v):
+                    try:
+                        return float(v) if v is not None and v != "None" else None
+                    except (TypeError, ValueError):
+                        return None
+
+                result = {
+                    "market_cap_mn":   _f(raw.get("market_cap") or raw.get("market_cap_mn")),
+                    "total_shares_mn": _f(raw.get("shares") or raw.get("total_shares_mn")),
+                    "free_float_mn":   _f(raw.get("free_float_mn") or raw.get("free_float")),
+                    "free_float_pct":  _f(raw.get("free_float_pct") or raw.get("free_float_percentage")),
+                    "paid_up_capital": _f(raw.get("paid_up_capital")),
+                }
+                set_cached(cache_key, result)
+                return result
+    except Exception as e:
+        logger.debug("Equity profile fetch failed for %s: %s", local, e)
+
+    return {}
+
+
+# ── Institutional Flows (AskAnalyst /api/market/fipi-lipi) ────────────
+
+
+def get_institutional_flows() -> Dict[str, Any]:
+    """
+    Fetch FIPI/LIPI institutional money flow data from AskAnalyst.
+
+    Endpoint: GET /api/market/fipi-lipi
+
+    Returns a dict with keys: flows (by investor type) and sector_fipi
+    (foreign flows by sector).  Cached for 15 minutes.
+    Returns empty dict on failure.
+    """
+    cache_key = "market:fipi_lipi"
+    cached = get_cached(cache_key, 60 * 15)  # 15 min TTL
+    if cached is not None:
+        return cached
+
+    try:
+        r = requests.get(
+            "https://api.askanalyst.com.pk/api/market/fipi-lipi",
+            timeout=8
+        )
+        if r.status_code == 200:
+            raw = r.json()
+            if raw:
+                set_cached(cache_key, raw)
+                return raw
+    except Exception as e:
+        logger.debug("FIPI/LIPI fetch failed: %s", e)
+
+    return {}
+
+
+# ── Analyst Consensus (AskAnalyst /api/research/consensus/{id}) ───────
+
+
+def get_analyst_consensus(symbol: str) -> Dict[str, Any]:
+    """
+    Fetch analyst consensus recommendation and target price from AskAnalyst.
+
+    Endpoint: GET /api/research/consensus/{company_id}
+
+    Returns dict with keys: recommendation, target_price_pkr,
+    upside_potential, report_metadata.
+    Returns empty dict on failure.
+    """
+    local = _local_symbol(symbol)
+    cache_key = f"consensus:{local}"
+    cached = get_cached(cache_key, CACHE_TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    ask_id = _get_askanalyst_id(local)
+    if not ask_id:
+        return {}
+
+    try:
+        r = requests.get(
+            f"https://api.askanalyst.com.pk/api/research/consensus/{ask_id}",
+            timeout=8
+        )
+        if r.status_code == 200:
+            raw = r.json()
+            if isinstance(raw, dict) and raw:
+                result = {
+                    "recommendation":  raw.get("recommendation"),
+                    "target_price_pkr": float(raw.get("target_price", 0) or 0) or None,
+                    "upside_potential": float(raw.get("upside_potential", 0) or 0) or None,
+                    "report_metadata": raw.get("report_metadata") or raw.get("research_house"),
+                    "last_updated":    raw.get("date") or raw.get("created_at"),
+                }
+                set_cached(cache_key, result)
+                return result
+    except Exception as e:
+        logger.debug("Analyst consensus fetch failed for %s: %s", local, e)
+
+    return {}
+
+
+# ── AskAnalyst Historical Chart (AskAnalyst /api/chart/{id}) ──────────
+
+
+def get_askanalyst_history(symbol: str, range_str: str = "1Y", interval: str = "1D") -> pd.DataFrame:
+    """
+    Fetch historical OHLCV data directly from AskAnalyst chart endpoint.
+
+    Endpoint: GET /api/chart/{company_id}?range={range}&interval={interval}
+
+    Useful as an additional fallback when PSX DPS and Yahoo REST both fail.
+    Supports ranges: 1W, 1M, 3M, 6M, 1Y, 3Y, 5Y
+    Intervals: 1D, 1W, 1M
+
+    Returns pandas DataFrame with columns Open, High, Low, Close, Volume.
+    Returns empty DataFrame on failure.
+    """
+    local = _local_symbol(symbol)
+    ask_id = _get_askanalyst_id(local)
+    if not ask_id:
+        return pd.DataFrame()
+
+    try:
+        import datetime
+        r = requests.get(
+            f"https://api.askanalyst.com.pk/api/chart/{ask_id}",
+            params={"range": range_str, "interval": interval},
+            timeout=10
+        )
+        if r.status_code != 200:
+            return pd.DataFrame()
+
+        raw = r.json()
+        # Try both direct array and nested data key
+        items = raw if isinstance(raw, list) else raw.get("data", [])
+        if not items:
+            return pd.DataFrame()
+
+        records = []
+        for item in items:
+            if isinstance(item, dict):
+                date_val = item.get("date") or item.get("datetime")
+                close = float(item.get("close", 0) or 0)
+                if not close:
+                    continue
+                records.append({
+                    "Date":   pd.to_datetime(date_val),
+                    "Open":   float(item.get("open") or close),
+                    "High":   float(item.get("high") or close),
+                    "Low":    float(item.get("low") or close),
+                    "Close":  close,
+                    "Volume": float(item.get("volume") or 0),
+                })
+            elif isinstance(item, list) and len(item) >= 5:
+                # Array format: [timestamp_ms, open, high, low, close, volume]
+                ts = item[0]
+                dt = datetime.datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts,
+                                                     tz=datetime.timezone.utc)
+                records.append({
+                    "Date":   dt,
+                    "Open":   float(item[1] or item[4]),
+                    "High":   float(item[2] or item[4]),
+                    "Low":    float(item[3] or item[4]),
+                    "Close":  float(item[4]),
+                    "Volume": float(item[5]) if len(item) > 5 else 0.0,
+                })
+
+        if not records:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(records)
+        df.set_index("Date", inplace=True)
+        df.sort_index(inplace=True)
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        return df
+
+    except Exception as e:
+        logger.debug("AskAnalyst history fetch failed for %s: %s", local, e)
+        return pd.DataFrame()
 
 
 # ── Ticker Search ────────────────────────────────────────────────────

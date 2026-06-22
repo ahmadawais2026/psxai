@@ -82,10 +82,11 @@ def _clean(text: str) -> str:
     return text
 
 
-def scrape_article(url: str) -> Optional[str]:
+def _scrape_with_selectors(url: str) -> Optional[str]:
     """
-    Fetch `url` and return the article body text, or None if unavailable.
-    Tries domain-specific selectors first, then generic fallbacks.
+    Legacy fallback: fetch `url` and extract the article body using
+    domain-specific CSS selectors, then generic fallbacks. Brittle on
+    redesigns and unable to render JS-driven pages.
     """
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT,
@@ -108,6 +109,37 @@ def scrape_article(url: str) -> Optional[str]:
                 return text
 
     return None
+
+
+def _strip_markdown_noise(md: str) -> str:
+    """Remove image syntax and reduce links to their anchor text so nav
+    menus and URL clutter don't drown the article body."""
+    # Drop image markdown entirely: ![alt](src)
+    md = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", md)
+    # Reduce links to plain anchor text: [text](url) -> text
+    md = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", md)
+    return md
+
+
+def scrape_article(url: str) -> Optional[str]:
+    """
+    Return the article body text for `url`, or None if unavailable.
+
+    Primary path is Firecrawl (clean markdown from any layout, handles
+    JS-rendered pages). Falls back to the legacy CSS-selector scraper when
+    Firecrawl is unconfigured or returns too little — so the pipeline keeps
+    working without an API key.
+    """
+    from data.firecrawl_client import scrape_markdown
+
+    markdown = scrape_markdown(url, only_main_content=True)
+    if markdown:
+        text = _clean(_strip_markdown_noise(markdown))
+        if len(text) >= MIN_CONTENT_LEN:
+            return text
+
+    # Fallback: legacy CSS-selector extraction
+    return _scrape_with_selectors(url)
 
 
 def enrich_news(force: bool = False, limit: Optional[int] = None) -> None:

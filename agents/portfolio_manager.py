@@ -24,6 +24,7 @@ class PortfolioManagerAgent(BaseAgent):
         super().__init__(
             name="Portfolio Manager",
             persona=PORTFOLIO_MANAGER_PERSONA,
+            role="portfolio_manager",
         )
 
     def generate_recommendation(

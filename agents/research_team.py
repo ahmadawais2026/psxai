@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from agents.base_agent import BaseAgent
 from agents.prompts import (
@@ -29,9 +29,9 @@ class ResearchTeam:
     """Manages the interactive debate committee between the Bull and Bear Researcher agents."""
 
     def __init__(self) -> None:
-        self.bull = BaseAgent("Bull Researcher", BULL_RESEARCHER_PERSONA)
-        self.bear = BaseAgent("Bear Researcher", BEAR_RESEARCHER_PERSONA)
-        self.synthesizer = BaseAgent("Debate Synthesizer", DEBATE_SYNTHESIZER_PERSONA)
+        self.bull = BaseAgent("Bull Researcher", BULL_RESEARCHER_PERSONA, role="bull")
+        self.bear = BaseAgent("Bear Researcher", BEAR_RESEARCHER_PERSONA, role="bear")
+        self.synthesizer = BaseAgent("Debate Synthesizer", DEBATE_SYNTHESIZER_PERSONA, role="debate_synthesizer")
 
     @property
     def model_name(self) -> Optional[str]:

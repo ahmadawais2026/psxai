@@ -11,8 +11,26 @@ DISCLAIMER: This is an educational tool only. NOT financial advice.
 import os
 import sys
 import json
+import logging
 import traceback
 from datetime import datetime
+
+# ── Logging ───────────────────────────────────────────────────
+# Configure root logging at INFO so the full analysis pipeline
+# (orchestrator/agents emit logger.info) is visible in Cloud Run /
+# Cloud Logging. Without this the root logger defaults to WARNING and
+# all pipeline progress is silently dropped in production. Override
+# with the LOG_LEVEL env var (e.g. DEBUG). force=True so it wins over
+# any handler gunicorn/Functions installed first; stdout so Cloud Run
+# ingests it.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+for _noisy in ("urllib3", "google.api_core", "google.auth", "werkzeug"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
@@ -36,7 +54,7 @@ if firebase_config:
 if not firebase_admin._apps:
     firebase_admin.initialize_app()
 
-from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG, GEMINI_API_KEY
+from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG, GEMINI_API_KEY, USE_VERTEX
 
 # ── Flask App Setup ───────────────────────────────────────────
 app = Flask(__name__, static_url_path="", static_folder="static")
@@ -68,6 +86,18 @@ class SafeJSONProvider(DefaultJSONProvider):
         return super().dumps(sanitize(obj), **kwargs)
 
 app.json = SafeJSONProvider(app)
+
+
+@app.after_request
+def set_streaming_headers(response):
+    """
+    Disable GFE/Nginx proxy buffering on all responses.
+    X-Accel-Buffering: no ensures Server-Sent Event chunks reach the client
+    immediately rather than being held in the Google Front End buffer.
+    Critical for the 2-4 minute multi-agent streaming pipeline.
+    """
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 
 
@@ -185,23 +215,18 @@ def analyze_stock():
     try:
         data = request.get_json(force=True)
         symbol = data.get("symbol", "").strip().upper()
-        model_name = data.get("model", "").strip() or "deepseek-v4-pro"
+        # model_name=None → agents self-route per role (config.ROLE_TIER). The UI
+        # no longer sends a model; an explicit value is only used for internal A/B.
+        model_name = (data.get("model") or "").strip() or None
 
         if not symbol:
             return jsonify({"error": "Symbol is required"}), 400
 
-        # Check API key configuration based on model selection
-        if "deepseek" in model_name.lower():
-            from config import DEEPSEEK_API_KEY
-            if not DEEPSEEK_API_KEY:
-                return jsonify({
-                    "error": "DeepSeek API key not configured. Please add DEEPSEEK_API_KEY to your config or environment variables."
-                }), 503
-        else:
-            if not GEMINI_API_KEY:
-                return jsonify({
-                    "error": "Gemini API key not configured. Please add GEMINI_API_KEY to your .env file."
-                }), 503
+        # Routing is first-party Gemini via Vertex AI (credit-covered on the trial).
+        if not USE_VERTEX and not GEMINI_API_KEY:
+            return jsonify({
+                "error": "Gemini API key not configured. Please add GEMINI_API_KEY to your .env file."
+            }), 503
 
         # Get portfolio context if requested
         user_context = None
@@ -210,7 +235,7 @@ def analyze_stock():
                 uid = _get_authenticated_uid(request)
                 if uid:
                     pm = _get_portfolio_manager()
-                    user_context = pm.get_position_context(uid, symbol)
+                    user_context = pm.get_portfolio_overlap_context(uid, symbol)
             except Exception:
                 user_context = None  # Proceed without portfolio context
 
@@ -240,20 +265,14 @@ def analyze_stock_stream():
         if not symbol:
             return jsonify({"error": "Ticker symbol is required"}), 400
 
-        model_name = data.get("model", "deepseek-v4-pro")
+        # model_name=None → agents self-route per role (see /api/analyze).
+        model_name = (data.get("model") or "").strip() or None
 
-        # Check API key configuration based on model selection
-        if "deepseek" in model_name.lower():
-            from config import DEEPSEEK_API_KEY
-            if not DEEPSEEK_API_KEY:
-                return jsonify({
-                    "error": "DeepSeek API key not configured. Please add DEEPSEEK_API_KEY to your config or environment variables."
-                }), 503
-        else:
-            if not GEMINI_API_KEY:
-                return jsonify({
-                    "error": "Gemini API key not configured. Please add GEMINI_API_KEY to your .env file."
-                }), 503
+        # Routing is first-party Gemini via Vertex AI (credit-covered on the trial).
+        if not USE_VERTEX and not GEMINI_API_KEY:
+            return jsonify({
+                "error": "Gemini API key not configured. Please add GEMINI_API_KEY to your .env file."
+            }), 503
 
         # Get portfolio context if requested
         user_context = None
@@ -262,7 +281,7 @@ def analyze_stock_stream():
                 uid = _get_authenticated_uid(request)
                 if uid:
                     pm = _get_portfolio_manager()
-                    user_context = pm.get_position_context(uid, symbol)
+                    user_context = pm.get_portfolio_overlap_context(uid, symbol)
             except Exception:
                 user_context = None
 
@@ -437,6 +456,44 @@ def generate_report():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
+
+
+@app.route("/api/dcf", methods=["POST"])
+def calculate_dynamic_dcf():
+    """
+    On-the-fly Exposable Assumptions DCF API.
+    Payload: { "fcf": float, "beta": float, "shares": float, "growth": float, "terminal_growth": float, "wacc_override": float }
+    """
+    data = request.json
+    try:
+        fcf = float(data.get("fcf", 0))
+        beta = float(data.get("beta", 1.0))
+        shares = float(data.get("shares", 0))
+        growth = float(data.get("growth", 0.08))
+        
+        if fcf <= 0 or shares <= 0:
+            return jsonify({"error": "Invalid FCF or Shares. DCF requires positive cashflow."}), 400
+            
+        from data.dcf_engine import DCFEngine
+        engine = DCFEngine()
+        
+        if "wacc_override" in data or "terminal_growth" in data:
+            # Custom singular calculation
+            tg = float(data.get("terminal_growth", 0.04))
+            val = engine.calculate_intrinsic_value(
+                base_fcf=fcf,
+                levered_beta=beta,
+                short_term_growth=growth,
+                terminal_growth=tg,
+                shares_outstanding=shares
+            )
+            return jsonify({"intrinsic_value": round(val, 2) if val else None})
+        else:
+            # Full scenarios return
+            results = engine.generate_scenarios(fcf, beta, shares, growth)
+            return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.errorhandler(404)

@@ -183,7 +183,9 @@ class Orchestrator:
         """
         symbol = symbol.strip().upper()
         
-        # Set the model_name on the analysts dynamically
+        # Default path: model_name is None → each agent self-routes by role
+        # (see config.ROLE_TIER / FALLBACK_BY_ROLE). Passing an explicit model_name
+        # is an internal A/B override that forces ONE model across all agents.
         if model_name:
             self.technical_analyst.model_name = model_name
             self.fundamentals_analyst.model_name = model_name
@@ -191,10 +193,13 @@ class Orchestrator:
             self.risk_analyst.model_name = model_name
             self.research_team.model_name = model_name
             self.portfolio_manager.model_name = model_name
-        
+
         # ── Cache Check ───────────────────────────────────────────
         from data.cache import get_cached, set_cached
-        cache_key = f"analysis:{symbol}:{model_name}" if model_name else f"analysis:{symbol}"
+        from config import ROUTING_VERSION
+        # Key by routing version (default) or the A/B override model, so changing
+        # the routing map or forcing a model invalidates stale cached analyses.
+        cache_key = f"analysis:{symbol}:{model_name}" if model_name else f"analysis:{symbol}:{ROUTING_VERSION}"
         cached_report = get_cached(cache_key, ttl_seconds=3600)  # 1 hour cache
         
         has_active_holdings = (
@@ -272,6 +277,27 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"Live news pre-fetch failed (non-fatal): {e}")
 
+        try:
+            from data.sbp_easydata import get_macro_snapshot
+            macro_context = get_macro_snapshot()
+        except Exception as e:
+            logger.warning(f"Macro snapshot failed: {e}")
+            macro_context = {}
+            
+        try:
+            from data.institutional_flows import get_full_flow_context
+            flows_context = get_full_flow_context()
+        except Exception as e:
+            logger.warning(f"Institutional flows failed: {e}")
+            flows_context = {}
+            
+        try:
+            from data.retail_sentiment import get_retail_sentiment_snapshot
+            retail_context = get_retail_sentiment_snapshot(symbol)
+        except Exception as e:
+            logger.warning(f"Retail sentiment failed: {e}")
+            retail_context = {}
+
         agent_context = {
             "sector": sector,
             "company_name": company_name,
@@ -279,6 +305,9 @@ class Orchestrator:
             "financials_text": get_financials_text(symbol),
             "research_reports": get_research_reports(symbol, sector=sector, max_reports=5),
             "company_news": get_local_company_news(symbol),
+            "macro_context": macro_context,
+            "institutional_flows": flows_context,
+            "retail_sentiment": retail_context,
         }
         
         yield {"event": "data_fetch", "status": "done"}
@@ -309,10 +338,46 @@ class Orchestrator:
         current_state = initial_state.copy()
 
         # Stream events from LangGraph
-        for step_event in self.graph.stream(initial_state, {"recursion_limit": 50}):
-            for node_name, updates in step_event.items():
-                yield {"event": "node_finish", "node": node_name}
-                current_state.update(updates)
+        try:
+            for step_event in self.graph.stream(initial_state, {"recursion_limit": 50}):
+                for node_name, updates in step_event.items():
+                    current_state.update(updates)
+                    try:
+                        yield {"event": "node_finish", "node": node_name}
+                    except GeneratorExit:
+                        logger.warning("Client disconnected from stream. Continuing pipeline execution to cache results...")
+                        # Run the rest of the graph to completion silently
+                        for remaining_step in self.graph.stream(current_state, {"recursion_limit": 50}):
+                            for r_node, r_updates in remaining_step.items():
+                                current_state.update(r_updates)
+                        raise
+        finally:
+            # Cache the report even if the client disconnected, provided we got the recommendation
+            if current_state.get("recommendation"):
+                debate_res = current_state.get("debate_result", {})
+                general_report = {
+                    "symbol": symbol,
+                    "company_name": company_name,
+                    "sector": sector,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "quote": quote,
+                    "technical_report": current_state.get("technical_report"),
+                    "fundamental_report": current_state.get("fundamental_report"),
+                    "sentiment_report": current_state.get("sentiment_report"),
+                    "risk_report": current_state.get("risk_report"),
+                    "debate": {
+                        "bull_thesis": debate_res.get("bull_thesis", ""),
+                        "bull_arguments": debate_res.get("bull_arguments", []),
+                        "bear_thesis": debate_res.get("bear_thesis", ""),
+                        "bear_arguments": debate_res.get("bear_arguments", []),
+                        "agreements": debate_res.get("agreements", []),
+                        "disagreements": debate_res.get("disagreements", [])
+                    },
+                    "recommendation": current_state.get("recommendation"),
+                    "disclaimer": DISCLAIMER
+                }
+                set_cached(cache_key, general_report)
+                logger.info(f"General report cached successfully in finally block for symbol: {symbol}")
 
         # ── Step 6: Compile overall general dossier ───────────────
         debate_res = current_state.get("debate_result", {})
@@ -339,9 +404,6 @@ class Orchestrator:
             "disclaimer": DISCLAIMER
         }
         
-        set_cached(cache_key, general_report)
-        logger.info(f"General report cached for symbol: {symbol}")
-        
         if has_active_holdings:
             logger.info(f"Generating custom recommendation for user context...")
             yield {"event": "node_finish", "node": "portfolio_custom"}
@@ -362,6 +424,7 @@ class Orchestrator:
             yield {"event": "complete", "report": custom_report}
         else:
             yield {"event": "complete", "report": general_report}
+
 
     def quick_quote(self, symbol: str) -> Dict[str, Any]:
         """Fetch quick stock quote information."""

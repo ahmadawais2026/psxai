@@ -8,7 +8,9 @@ A premium, multi-agent financial advisory platform for the **Pakistan Stock Exch
 
 ## 🏛️ Architecture Overview
 
-The platform uses a pipeline of orchestrated **Gemini** agents, integrating deterministic calculations with advanced LLM reasoning to ensure zero arithmetic hallucinations and counter agent sycophancy.
+The platform uses a **LangGraph**-orchestrated pipeline of specialist agents (Technical, Fundamental, Sentiment, Risk run in parallel, then a debate and synthesis stage), integrating deterministic calculations with advanced LLM reasoning to ensure zero arithmetic hallucinations and counter agent sycophancy.
+
+**Model backend.** Agents run on a dual-model layer served entirely through **Google Vertex AI Agent Platform** (project `aiforpsx`): **DeepSeek-V4-Pro** (default, with Think Max reasoning) and **Gemini** (3.x → mapped to available Vertex model IDs). Authentication is via Application Default Credentials — no per-provider API keys at runtime.
 
 ```mermaid
 graph TD
@@ -35,7 +37,9 @@ graph TD
 2. **Disagree-or-Commit Deliberation (FinCom)**: A structured debate between Bull and Bear researchers to challenge assumptions, surface contrarian risks, and prevent conformity bias.
 3. **Grounded Debate Synthesis**: A dedicated synthesizer agent acts as a debate arbitrator, extracting genuine agreements and disagreements based purely on the debate transcript (excluding fabrication), while programmatic checks calculate conviction gaps.
 4. **Position-Aware Sizing (FinPos)**: The Portfolio Manager agent adjusts advice based on current holdings and flags overconcentration (>15% portfolio weight).
-5. **Layered Memory (FinMem)**: SQLite-backed TTL caching (market quotes: 5min, news: 1hr, fundamentals: 24hr) to respect rate limits and reduce latency.
+5. **Layered Memory (FinMem)**: SQLite-backed TTL caching (quotes: 10s, history: 15min, news: 1hr, fundamentals: 24hr) to respect rate limits and reduce latency, backed by a **Firestore** store of company financials and price history.
+6. **Automated DCF Engine**: A 2-stage FCFE discounted cash-flow model (`data/dcf_engine.py`) computes Base/Bull/Bear intrinsic values and a sensitivity matrix from *live, company-specific* inputs — risk-free rate from **SBP EasyData** (T-bill / policy rate), beta computed vs. the KSE-100, and a historical growth CAGR derived from filed statements. Results are fed to the Fundamentals Analyst as grounded evidence.
+7. **API-First Data, Firecrawl for Prose**: Structured numeric data (financial statements, OHLCV prices, ratios) is pulled from the **AskAnalyst / PSX DPS JSON APIs** — never HTML-scraped. **Firecrawl** is used only for *unstructured* content (news article full-text, research reports) where there is no clean API.
 
 ---
 
@@ -56,11 +60,17 @@ The project consists of ~45 source files grouped by functional layers:
 │   └── prompts.py               # Persona definitions & system instructions
 │
 ├── data/                        # Financial data ingestion & caching
-│   ├── market_data.py           # yfinance & PSX data fetching
-│   ├── technical_indicators.py  # Mathematical computation of indicators
+│   ├── market_data.py           # Quotes, OHLCV history, fundamentals, statements
+│   │                            #   (AskAnalyst / PSX DPS JSON APIs; Firestore-first)
+│   ├── dcf_engine.py            # 2-stage FCFE discounted cash-flow valuation engine
+│   ├── sbp_easydata.py          # State Bank of Pakistan macro data (rates, M2, FX, risk-free)
+│   ├── institutional_flows.py   # MUFAP / LIPI-FIPI institutional flow context
+│   ├── retail_sentiment.py      # Broker research & retail sentiment signals
+│   ├── firecrawl_client.py      # Firecrawl REST wrapper (unstructured content only)
+│   ├── technical_indicators.py  # Mathematical computation of indicators & risk suite
 │   ├── news_data.py             # RSS feed & news fetcher
-│   ├── live_scraper.py          # AskAnalyst scraping & live data refresh
-│   ├── local_data.py            # Financial data extracts and files
+│   ├── live_scraper.py          # Per-run live news refresh (AskAnalyst API)
+│   ├── local_data.py            # Research reports, news, financials text assembly
 │   ├── cache.py                 # SQLite TTL Cache logic
 │   ├── advisor_cache.db         # Cache database
 │   ├── portfolio.db             # Holdings database
@@ -81,7 +91,17 @@ The project consists of ~45 source files grouped by functional layers:
 │
 ├── app.py                       # Main Flask web app containing API routes
 ├── main.py                      # Firebase Cloud Functions entrypoint wrapper
-├── config.py                    # Environment settings configuration
+├── config.py                    # Environment settings, model + Firebase init
+│
+│   # ── Data ingestion / maintenance scripts ──
+├── backfill_firestore.py        # Bulk-load all PSX companies (statements + 1y OHLCV) to Firestore
+├── scrape_askanalyst.py         # AskAnalyst statement-fetch helpers (income/balance/cash-flow)
+├── refresh_company_data.py      # Per-ticker company data refresh
+├── download_research_reports.py # Download + extract broker research PDFs to markdown
+├── fetch_news_content.py        # Enrich news with full article text (Firecrawl-backed)
+├── fetch_market_intelligence.py # Market-wide news/RSS aggregation
+├── fetch_macro_data.py          # SBP macro snapshot refresh
+│
 ├── requirements.txt             # Python dependency requirements
 ├── firebase.json                # Firebase hosting and functions deploy config
 └── README.md                    # This documentation file
@@ -93,7 +113,8 @@ The project consists of ~45 source files grouped by functional layers:
 
 ### 1. Prerequisites
 - Python 3.8+
-- A Google Gemini API Key (get one at [Google AI Studio](https://aistudio.google.com/))
+- **Google Cloud SDK** (`gcloud`) — the app authenticates to Vertex AI and Firestore via Application Default Credentials
+- Access to the `aiforpsx` Google Cloud / Firebase project
 
 ### 2. Installation
 Clone the repository and install the dependencies:
@@ -101,14 +122,45 @@ Clone the repository and install the dependencies:
 pip install -r requirements.txt
 ```
 
-### 3. Environment Setup
-Create a `.env` file in the root directory and add your credentials:
+### 3. Authenticate (Application Default Credentials)
+The model layer (Vertex AI) and Firestore both use ADC. Sign in once:
+```bash
+gcloud auth application-default login
+```
+> The app pins the Firebase/Firestore project to `aiforpsx` (`FIREBASE_PROJECT_ID` in `config.py`). This override is required because `gcloud`'s *default* project may differ from `aiforpsx` — without it the SDK targets the wrong project and Firestore returns "database does not exist".
+
+### 4. Environment Setup
+Create a `.env` file in the root directory:
 ```ini
-GEMINI_API_KEY=your_actual_gemini_api_key_here
+# Model layer (Vertex AI Agent Platform) — uses ADC, no model API keys needed
+USE_VERTEX=true
+VERTEX_PROJECT=project-744d0520-c16e-4aa5-b3e
+VERTEX_LOCATION=us-central1
+
+# Firestore / Firebase (override only if not aiforpsx)
+# FIREBASE_PROJECT_ID=aiforpsx
+
+# Firecrawl — required only for news/research full-text extraction
+FIRECRAWL_API_KEY=fc-your_key_here
+
+# Optional: SBP EasyData API key for macro data (falls back to public scrape)
+# SBP_EASYDATA_API_KEY=...
+
 FLASK_DEBUG=true
 ```
 
-### 4. Running the Application Locally
+### 5. Backfill Firestore (first run)
+Populate company financials and 12-month price history for all PSX companies:
+```bash
+# Validate fetch + shape without writing
+python backfill_firestore.py --dry-run --tickers ABOT OGDC
+
+# Small live batch, then the full universe
+python backfill_firestore.py --tickers ABOT OGDC LUCK
+python backfill_firestore.py --all --skip-existing
+```
+
+### 6. Running the Application Locally
 Start the Flask development server:
 ```bash
 python app.py
