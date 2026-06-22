@@ -183,10 +183,14 @@ def build_history_bars(symbol: str) -> List[Dict[str, Any]]:
 
 
 def doc_exists(db, symbol: str) -> bool:
-    """True if this company already has an annual financials doc written."""
+    """True if this company already has a non-empty annual financials doc written."""
     try:
         ref = db.collection("companies").document(symbol).collection("financials").document("annual")
-        return ref.get().exists
+        doc = ref.get()
+        if not doc.exists:
+            return False
+        data = doc.to_dict() or {}
+        return len(data.get("income_statement", [])) > 0
     except Exception:
         return False
 
@@ -240,8 +244,8 @@ def main():
     ap.add_argument("--limit", type=int, default=None, help="Cap the number of companies processed.")
     ap.add_argument("--dry-run", action="store_true", help="Fetch + parse only; do NOT write to Firestore.")
     ap.add_argument("--skip-existing", action="store_true", help="Skip companies that already have an annual doc.")
-    ap.add_argument("--sleep", type=float, default=0.5, help="Delay between companies (seconds).")
-    ap.add_argument("--workers", type=int, default=8, help="Number of concurrent worker threads.")
+    ap.add_argument("--sleep", type=float, default=2.0, help="Delay between companies (seconds).")
+    ap.add_argument("--workers", type=int, default=3, help="Number of concurrent worker threads.")
     args = ap.parse_args()
 
     print("=" * 64)

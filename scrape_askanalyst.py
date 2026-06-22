@@ -33,62 +33,87 @@ def get_company_id(symbol):
     return None, None
 
 
+def _robust_request(method: str, url: str, **kwargs) -> requests.Response:
+    import time
+    retries = 5
+    delay = 2.0
+    headers = kwargs.pop("headers", {})
+    headers.update({
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer undefined",
+        "Origin": "https://www.askanalyst.com.pk",
+        "Referer": "https://www.askanalyst.com.pk/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
+    kwargs["headers"] = headers
+
+    r = None
+    for attempt in range(retries):
+        try:
+            r = requests.request(method, url, **kwargs)
+            if r.status_code == 429:
+                print(f"    [!] Rate limited (429). Retrying in {delay}s...")
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return r
+        except requests.exceptions.RequestException as e:
+            if attempt == retries - 1:
+                raise e
+            time.sleep(delay)
+            delay *= 2
+
+    if r is not None:
+        raise requests.exceptions.HTTPError(f"Exhausted retries on HTTP {r.status_code}", response=r)
+    else:
+        raise requests.exceptions.RequestException("Failed to establish connection after retries")
+
+
 def fetch_statement_data(endpoint, company_id, period="annual"):
     """
     Fetch financial statements (Income Statement or Balance Sheet) via GET/POST lifecycle.
     """
-    # 1. GET request to fetch available dates
     dates_url = f"{BASE_API_URL}/{endpoint}/{company_id}"
-    try:
-        r_get = requests.get(dates_url)
-        if r_get.status_code != 200:
-            print(f"    [-] GET dates failed for /{endpoint}/: {r_get.status_code}")
-            return None
-        
-        dates_data = r_get.json().get("dates", {})
-        dates_key = "quarter" if period == "quarter" else "annual"
-        dates_list = dates_data.get(dates_key, [])
-        if not dates_list:
-            print(f"    [-] No {period} dates found for /{endpoint}/")
-            return None
-        
-        # Sort dates to find the range
-        sdate = dates_list[-1].get("start_date")
-        edate = dates_list[0].get("start_date")
-        
-        # 2. POST request to retrieve the statement tables
-        payload = {
-            "company": {"id": company_id},
-            "sdate": sdate,
-            "edate": edate,
-            "period": period
-        }
-        
-        r_post = requests.post(dates_url, json=payload)
-        if r_post.status_code == 200:
-            return r_post.json()
-        else:
-            print(f"    [-] POST failed for /{endpoint}/: {r_post.status_code}")
-    except Exception as e:
-        print(f"    [-] Exception fetching /{endpoint}/: {e}")
-    return None
+    r_get = _robust_request("GET", dates_url, timeout=15)
+    r_get.raise_for_status()
+
+    dates_data = r_get.json().get("dates", {})
+    dates_key = "quarter" if period == "quarter" else "annual"
+    dates_list = dates_data.get(dates_key, [])
+    if not dates_list:
+        print(f"    [-] No {period} dates found for /{endpoint}/")
+        return None
+
+    # Sort dates to find the range
+    sdate = dates_list[-1].get("start_date")
+    edate = dates_list[0].get("start_date")
+
+    # 2. POST request to retrieve the statement tables
+    payload = {
+        "company": {"id": company_id},
+        "sdate": sdate,
+        "edate": edate,
+        "period": period
+    }
+
+    r_post = _robust_request("POST", dates_url, json=payload, timeout=15)
+    r_post.raise_for_status()
+    return r_post.json()
 
 
 def fetch_cash_flow(company_id):
     """Fetch Cash Flow statement from the GET /cf/{id} endpoint."""
     url = f"{BASE_API_URL}/cf/{company_id}"
-    try:
-        r = requests.get(url)
-        if r.status_code == 200:
-            return r.json()
-        elif r.status_code == 500:
-            print("    [!] WARNING: Cash Flow endpoint returned 500 Internal Server Error.")
-            print("        (This is a known AskAnalyst API bug for banking sector companies like HBL).")
-        else:
-            print(f"    [-] Cash Flow request failed: Status code {r.status_code}")
-    except Exception as e:
-        print(f"    [-] Exception fetching Cash Flow: {e}")
-    return None
+    r = _robust_request("GET", url, timeout=15)
+    if r.status_code == 200:
+        return r.json()
+    elif r.status_code == 500:
+        print("    [!] WARNING: Cash Flow endpoint returned 500 Internal Server Error.")
+        print("        (This is a known AskAnalyst API bug for banking sector companies like HBL).")
+        return None
+    else:
+        r.raise_for_status()
 
 
 def flatten_statement_list(raw_list):

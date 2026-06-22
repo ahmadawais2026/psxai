@@ -32,7 +32,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 
-ALL_SECTIONS = ["news", "content", "briefings", "reports", "sectors", "macro", "intel", "tickers"]
+ALL_SECTIONS = ["news", "content", "briefings", "reports", "sectors", "macro", "intel", "tickers", "hourly"]
 
 
 # ── timing helper ──────────────────────────────────────────────────────────────
@@ -176,6 +176,25 @@ def run_tickers():
         t.done(ok=False)
 
 
+def run_hourly(tickers: list[str] | None = None):
+    t = _Timer("hourly market data aggregation")
+    hourly_script = BASE_DIR / "archive_hourly_data.py"
+    if not hourly_script.exists():
+        print("  [~] archive_hourly_data.py not found — skipping")
+        t.done()
+        return
+    try:
+        import subprocess
+        cmd = [sys.executable, str(hourly_script)]
+        if tickers:
+            cmd += ["--tickers"] + tickers
+        result = subprocess.run(cmd, cwd=str(BASE_DIR))
+        t.done(ok=result.returncode == 0)
+    except Exception as e:
+        print(f"  [!] hourly failed: {e}")
+        t.done(ok=False)
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -219,6 +238,7 @@ def main():
         elif section == "macro":     run_macro(no_live=args.no_live)
         elif section == "intel":     run_intel(ticker=args.ticker)
         elif section == "tickers":   run_tickers()
+        elif section == "hourly":    run_hourly(tickers=[args.ticker] if args.ticker else None)
 
     elapsed = time.time() - total_start
     _header(f"DONE  ({elapsed/60:.1f} min)")

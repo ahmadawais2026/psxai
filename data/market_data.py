@@ -600,7 +600,41 @@ def get_history(
             pass  # fall through to fresh fetch
 
     try:
-        if interval == "1d":
+        if interval == "1h":
+            try:
+                from config import firebase_db
+                if firebase_db:
+                    doc_ref = firebase_db.collection("companies").document(local).collection("market").document("history_hourly")
+                    doc = doc_ref.get()
+                    if doc.exists:
+                        bars = (doc.to_dict() or {}).get("bars", [])
+                        if bars:
+                            records = []
+                            for b in bars:
+                                records.append({
+                                    "Date": pd.to_datetime(b["date"]),
+                                    "Open": float(b.get("open") or 0.0),
+                                    "High": float(b.get("high") or 0.0),
+                                    "Low": float(b.get("low") or 0.0),
+                                    "Close": float(b.get("close") or 0.0),
+                                    "Volume": float(b.get("volume") or 0.0)
+                                })
+                            df = pd.DataFrame(records)
+                            df.set_index("Date", inplace=True)
+                            df.sort_index(inplace=True)
+                            
+                            df_reset = df.reset_index()
+                            if "Date" in df_reset.columns:
+                                df_reset["Date"] = df_reset["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                            cache_data = df_reset.to_dict(orient="records")
+                            set_cached(cache_key, cache_data)
+                            
+                            return df
+            except Exception as e:
+                logger.warning("Failed to fetch hourly history from Firestore for %s: %s", local, e)
+            return pd.DataFrame()
+
+        elif interval == "1d":
             try:
                 from data import psx_portal
                 df = psx_portal.fetch_eod_history(local)
