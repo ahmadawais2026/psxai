@@ -97,7 +97,8 @@ def _df_to_rows(df) -> List[Dict[str, Any]]:
 
 def get_company_list() -> List[Dict[str, Any]]:
     """Return AskAnalyst's full company list with ids/symbols/sectors."""
-    r = requests.get(f"{BASE_API_URL}/companylistwithids", timeout=20)
+    from scrape_askanalyst import _robust_request
+    r = _robust_request("GET", f"{BASE_API_URL}/companylistwithids", timeout=20)
     r.raise_for_status()
     return r.json()
 

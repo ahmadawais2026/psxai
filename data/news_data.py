@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 import cloudscraper
 import urllib.parse
@@ -106,13 +106,31 @@ def filter_news_with_llm(symbol: str, articles: List[Dict[str, Any]]) -> List[Di
         
     return articles # Fallback to all articles if LLM fails
 
+def _parse_pub_date(published: str) -> datetime:
+    """Best-effort parse of the various ``published`` formats into a datetime.
+
+    Undated or unparseable items sort to the bottom (``datetime.min``) so the
+    freshest dated articles always rank first.
+    """
+    if not published:
+        return datetime.min
+    s = str(published).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                "%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            continue
+    return datetime.min
+
+
 def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
     """
     Fetch news articles for a stock ticker from AskAnalyst endpoints (Tier 1),
     and fall back/supplement with Google News RSS (Tier 2/3).
     Includes in-memory deduplication and LLM noise filtering.
     """
-    cache_key = f"news_rss_v2:{symbol.upper()}"
+    cache_key = f"news_rss_v3:{symbol.upper()}"
     cached = get_cached(cache_key, CACHE_TTL_NEWS)
     if cached is not None:
         logger.info(f"News cache hit for {symbol}")
@@ -184,8 +202,10 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Tier 2 AskAnalyst market news failed: {e}")
         
-    # Tier 3: Google News RSS via cloudscraper
-    if len(raw_articles) < max_articles:
+    # Tier 3: Google News RSS via cloudscraper. Always run — otherwise a
+    # stale-but-large AskAnalyst feed (e.g. OGDC's 2024-only company feed)
+    # crowds out fresh wire news and the result is months out of date.
+    if True:
         logger.info(f"Supplementing with Google News RSS Tier 3...")
         query = f'"{clean_sym}" (site:dawn.com OR site:brecorder.com OR site:mettisglobal.news OR site:profit.pakistantoday.com.pk OR site:tribune.com.pk)'
         rss_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
@@ -220,8 +240,16 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
         except Exception as e:
             logger.error(f"Tier 3 Google News RSS failed for {clean_sym}: {e}")
             
+    # Sort newest-first so truncation keeps the LATEST news, then prefer the
+    # last 12 months — falling back to the full sorted list if too few recent
+    # items remain, so sparse-coverage tickers don't end up empty.
+    raw_articles.sort(key=lambda a: _parse_pub_date(a.get("published", "")), reverse=True)
+    cutoff = datetime.now() - timedelta(days=365)
+    recent = [a for a in raw_articles if _parse_pub_date(a.get("published", "")) >= cutoff]
+    ranked = recent if len(recent) >= 3 else raw_articles
+
     # Apply Deduplication Pipeline
-    deduped_articles = _deduplicate_articles(raw_articles)
+    deduped_articles = _deduplicate_articles(ranked)
     
     # Apply LLM Entity Resolution (Noise Filtering)
     # We only pass top 20 to LLM to save tokens

@@ -49,13 +49,23 @@ class PortfolioManagerAgent(BaseAgent):
         self._log(f"Compiling final recommendation for {symbol} …")
 
         # ── Step 1: Serialize inputs for LLM prompt ──────────────
-        reports_json = json.dumps(analyst_reports, indent=2)
+        # Compact serialization (no indent) keeps the synthesis prompt lean —
+        # indent=2 inflated the token count purely with whitespace. The verbose
+        # raw_response blob from any analyst's JSON-fallback path is dropped too,
+        # since it carries no decision-relevant structure for the final verdict.
+        def _slim(report: Any) -> Any:
+            if isinstance(report, dict):
+                return {k: v for k, v in report.items() if k != "raw_response"}
+            return report
+
+        slim_reports = {k: _slim(v) for k, v in analyst_reports.items()}
+        reports_json = json.dumps(slim_reports, separators=(",", ":"))
         debate_json = json.dumps({
             "bull_thesis": debate_result.get("bull_thesis", ""),
             "bear_thesis": debate_result.get("bear_thesis", ""),
             "agreements": debate_result.get("agreements", []),
             "disagreements": debate_result.get("disagreements", [])
-        }, indent=2)
+        }, separators=(",", ":"))
         
         # Position-aware context construction
         if user_context and user_context.get("owns_stock", False):

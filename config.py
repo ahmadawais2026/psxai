@@ -12,7 +12,7 @@ GEMINI_MAX_OUTPUT_TOKENS = 100000  # Generous ceiling so deep reasoning + granul
 # ── Vertex AI Configuration ───────────────────────────────────
 USE_VERTEX = os.getenv("USE_VERTEX", "true").lower() == "true"
 VERTEX_PROJECT = os.getenv("VERTEX_PROJECT", "project-744d0520-c16e-4aa5-b3e")
-VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "global")  # Gemini 3.x models are served on the `global` endpoint only (404 in us-central1)
 
 def map_model_name(model_name: str) -> str:
     """Map the UI's model selection to the exact Vertex AI model ID.
@@ -27,9 +27,12 @@ def map_model_name(model_name: str) -> str:
     """
     if not model_name:
         return "gemini-3.5-flash"
-    # Aliases for any UI label whose Vertex model ID differs go here, e.g.:
-    #   "gemini-3.1-pro": "gemini-3.1-pro-preview",
-    aliases = {}
+    # Aliases for any UI label whose Vertex model ID differs go here. The Pro
+    # model ships under a `-preview` suffix in Model Garden; without this alias
+    # every reasoning-tier call (and the news entity-resolution filter) 404s.
+    aliases = {
+        "gemini-3.1-pro": "gemini-3.1-pro-preview",
+    }
     return aliases.get(model_name.lower(), model_name)
 
 # ── DeepSeek Configuration ────────────────────────────────────

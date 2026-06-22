@@ -22,7 +22,7 @@ def get_company_id(symbol):
     """Fetch the company list from the API and match the symbol to get the ID."""
     url = f"{BASE_API_URL}/companylistwithids"
     try:
-        r = requests.get(url)
+        r = _robust_request("GET", url, timeout=15)
         if r.status_code == 200:
             companies = r.json()
             for c in companies:
@@ -33,7 +33,13 @@ def get_company_id(symbol):
     return None, None
 
 
+import threading
+
+_rate_limit_lock = threading.Lock()
+_last_request_time = 0.0
+
 def _robust_request(method: str, url: str, **kwargs) -> requests.Response:
+    global _last_request_time
     import time
     retries = 5
     delay = 2.0
@@ -47,6 +53,14 @@ def _robust_request(method: str, url: str, **kwargs) -> requests.Response:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     })
     kwargs["headers"] = headers
+
+    # Enforce minimum 1.0 second between request starts to respect AskAnalyst rate limit
+    with _rate_limit_lock:
+        now = time.time()
+        elapsed = now - _last_request_time
+        if elapsed < 1.0:
+            time.sleep(1.0 - elapsed)
+        _last_request_time = time.time()
 
     r = None
     for attempt in range(retries):
@@ -241,7 +255,7 @@ def fetch_company_ratios(company_id):
     """Fetch financial ratios from GET /ratio/{id} endpoint."""
     url = f"{BASE_API_URL}/ratio/{company_id}"
     try:
-        r = requests.get(url, timeout=10)
+        r = _robust_request("GET", url, timeout=10)
         if r.status_code == 200:
             return r.json()
     except Exception as e:
@@ -253,7 +267,7 @@ def fetch_company_news(company_id):
     """Fetch company-specific news/announcements from GET /news/{id} endpoint."""
     url = f"{BASE_API_URL}/news/{company_id}"
     try:
-        r = requests.get(url, timeout=10)
+        r = _robust_request("GET", url, timeout=10)
         if r.status_code == 200:
             resp_json = r.json()
             if isinstance(resp_json, dict) and "data" in resp_json:
@@ -267,7 +281,7 @@ def fetch_share_price_quote(company_id):
     """Fetch latest share price quote from GET /sharepricedatanew/{id} endpoint."""
     url = f"{BASE_API_URL}/sharepricedatanew/{company_id}"
     try:
-        r = requests.get(url, timeout=10)
+        r = _robust_request("GET", url, timeout=10)
         if r.status_code == 200:
             return r.json()
     except Exception as e:
