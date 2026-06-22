@@ -23,11 +23,23 @@
     "codebase": "default",
     "ignore": [
       "static/**",
-      ".venv/**",
-      "venv/**",
+      ".git",
       ".git/**",
-      "__pycache__/**",
-      "data/*.db"
+      ".firecrawl/**",
+      "venv",
+      "venv/**",
+      "**/venv/**",
+      ".venv",
+      ".venv/**",
+      "**/__pycache__/**",
+      "**/*.pyc",
+      "**/*.db",
+      "*.log",
+      "logs.txt",
+      "*.docx",
+      "scratch/**",
+      "scratch_*.py",
+      "test_pdfs/**"
     ]
   }
 }
