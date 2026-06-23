@@ -93,18 +93,45 @@ class PortfolioManagerAgent(BaseAgent):
         else:
             context_summary = "User does NOT currently own this stock. Evaluate pure market-entry potential."
 
-        # ── Step 2: Query Gemini ──────────────────────────────────
+        # ── Step 2: Extract structured sub-scores for the coherence guard ──────
+        # These are extracted deterministically from the structured analyst output
+        # fields before the LLM call so the guard has clean numbers to check,
+        # independent of what the LLM decides to say in its synthesis.
+        risk_report = analyst_reports.get("risk") or {}
+        tech_report = analyst_reports.get("technical") or {}
+        sent_report = analyst_reports.get("sentiment") or {}
+
+        risk_score       = float(risk_report.get("risk_score") or 0)
+        bull_conviction  = float(debate_result.get("bull_conviction") or
+                                 debate_result.get("bull_score") or 0)
+        bear_conviction  = float(debate_result.get("bear_conviction") or
+                                 debate_result.get("bear_score") or 0)
+        emcs_score       = debate_result.get("emcs_score")
+        sentiment_score  = float(sent_report.get("sentiment_score") or
+                                 sent_report.get("confidence") or 5)
+        tech_trend       = (tech_report.get("trend") or "neutral").lower()
+
+        # ── Step 3: Query Gemini ──────────────────────────────────────────────
+        sub_score_block = (
+            f"Risk Score: {risk_score:.0f}/10\n"
+            f"Bull Conviction: {bull_conviction:.0f}/10\n"
+            f"Bear Conviction: {bear_conviction:.0f}/10\n"
+            f"EMCS Score: {emcs_score if emcs_score is not None else 'N/A'}\n"
+            f"Sentiment Score: {sentiment_score:.0f}/10\n"
+            f"Technical Trend: {tech_trend}"
+        )
         prompt = FINAL_VERDICT_TEMPLATE.format(
             all_reports=reports_json,
             debate_summary=debate_json,
             user_context=context_summary,
             calibration_context=(calibration_context or
-                "TRACK RECORD: not available for this run.")
+                "TRACK RECORD: not available for this run."),
+            sub_scores=sub_score_block,
         )
-        
+
         report = self.query_json(prompt)
 
-        # ── Step 2b: Calibrate conviction against disagreement & failures ──
+        # ── Step 3b: Calibrate conviction against disagreement & failures ──────
         # The LLM tends to over-anchor on a headline call; enforce a ceiling
         # deterministically. EMCS caps conviction when the debate was divided,
         # and each failed/timed-out analyst module (confidence == 0) shaves a
@@ -129,6 +156,30 @@ class PortfolioManagerAgent(BaseAgent):
             report["confidence"] = capped
         except Exception as exc:
             self._log(f"Conviction calibration skipped: {exc}")
+
+        # ── Step 3c: Direction coherence guard ───────────────────────────────
+        # Conservative: only fires when ALL THREE conditions are simultaneously true.
+        # Only downgrades to HOLD (never to SELL). Does not override HOLD or bearish calls.
+        try:
+            rec = (report.get("recommendation") or "HOLD").upper().strip()
+            emcs_val = debate_result.get("emcs_score")
+            contradicted = (
+                rec in ("STRONG BUY", "BUY", "ACCUMULATE")
+                and emcs_val is not None and float(emcs_val) < 5.0
+                and bear_conviction > bull_conviction
+                and risk_score >= 8
+            )
+            if contradicted:
+                report["original_recommendation"] = rec
+                report["recommendation"] = "HOLD"
+                report["coherence_override"] = True
+                self._log(
+                    f"Coherence guard: {rec} → HOLD "
+                    f"(EMCS={emcs_val:.2f}, bear={bear_conviction:.0f} > "
+                    f"bull={bull_conviction:.0f}, risk={risk_score:.0f}/10)"
+                )
+        except Exception as exc:
+            self._log(f"Coherence guard skipped: {exc}")
 
         # Attach standard disclaimer and symbol reference
         report["symbol"] = symbol.upper()

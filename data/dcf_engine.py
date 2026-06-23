@@ -65,15 +65,43 @@ class DCFEngine:
         
         return intrinsic_value_per_share
 
-    def generate_scenarios(self, base_fcf, levered_beta, shares_outstanding, historical_growth):
+    def generate_scenarios(
+        self,
+        base_fcf,
+        levered_beta,
+        shares_outstanding,
+        historical_growth,
+        current_price=None,
+        book_value_per_share=None,
+        high_52w=None,
+    ):
         """
         Generates Base, Bull, and Bear scenarios.
+
+        Optional sanity-check arguments (current_price, book_value_per_share, high_52w)
+        are used to flag implausibly high DCF values without clamping them.
+        When any scenario value exceeds max(3x price, 3x book, 1.5x 52-wk high),
+        the scenario dict gains a 'sanity_flag': True key so downstream consumers
+        can discard the DCF and fall back to relative valuation.
         """
         if base_fcf <= 0 or shares_outstanding <= 0:
             return {"error": "Negative FCF or invalid shares. Fallback to Relative Valuation required."}
-            
+
+        # Pre-compute sanity ceiling: the highest value we'd consider credible.
+        # We take the maximum across all available reference points so that any
+        # single generous anchor is enough to avoid a false flag.
+        # Only apply the ceiling when at least one reference price is provided.
+        _ref_ceilings = []
+        if current_price and current_price > 0:
+            _ref_ceilings.append(3.0 * current_price)
+        if book_value_per_share and book_value_per_share > 0:
+            _ref_ceilings.append(3.0 * book_value_per_share)
+        if high_52w and high_52w > 0:
+            _ref_ceilings.append(1.5 * high_52w)
+        _sanity_ceiling = max(_ref_ceilings) if _ref_ceilings else None
+
         ke = self.calculate_cost_of_equity(levered_beta)
-        
+
         scenarios = {
             "base": {
                 "short_term_growth": historical_growth,
@@ -88,7 +116,7 @@ class DCFEngine:
                 "terminal_growth": 0.02, # 2% long term growth
             }
         }
-        
+
         results = {}
         for scenario, assumptions in scenarios.items():
             val = self.calculate_intrinsic_value(
@@ -98,18 +126,30 @@ class DCFEngine:
                 terminal_growth=assumptions["terminal_growth"],
                 shares_outstanding=shares_outstanding
             )
-            results[scenario] = {
+            scenario_result = {
                 "value": round(val, 2) if val else None,
                 "assumptions": assumptions,
                 "cost_of_equity": round(ke, 4)
             }
-            
+            # Sanity check: flag values that exceed the credibility ceiling.
+            # We flag rather than clamp so the analyst can still see the raw
+            # model output while being explicitly warned it is non-credible.
+            if val is not None and _sanity_ceiling is not None and val > _sanity_ceiling:
+                scenario_result["sanity_flag"] = True
+                scenario_result["sanity_ceiling"] = round(_sanity_ceiling, 2)
+                scenario_result["sanity_note"] = (
+                    f"DCF value {val:.2f} exceeds credibility ceiling "
+                    f"{_sanity_ceiling:.2f} (3x price/book or 1.5x 52-wk high). "
+                    "Treat as non-credible; use relative valuation instead."
+                )
+            results[scenario] = scenario_result
+
         # Build 3x3 Sensitivity Matrix around the Base Case WACC(Ke) and Terminal Growth
         base_tg = scenarios["base"]["terminal_growth"]
         sensitivity_matrix = self._build_sensitivity_matrix(
             base_fcf, historical_growth, shares_outstanding, ke, base_tg
         )
-        
+
         results["sensitivity_matrix"] = sensitivity_matrix
         return results
         

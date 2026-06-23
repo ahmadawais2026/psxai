@@ -591,8 +591,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     else:
         story.append(Paragraph("Income Statement", st["sub"]))
         story.append(Paragraph(
-            "(Financial statement tables are populated from Firestore when this report is generated "
-            "on the live server. See the AI-derived fundamental assessment below.)",
+            "(Income statement data not available for this company.)",
             st["italic"],
         ))
         story.append(Spacer(1, 0.15 * cm))
@@ -639,7 +638,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         ("P/E Ratio",        f"{float(pe):.1f}x" if pe   else "-"),
         ("P/B Ratio",        f"{float(pb):.2f}x" if pb   else "-"),
         ("EV/EBITDA",        _rx(funda.get("ev_to_ebitda"))),
-        ("EPS (TTM)",        f"PKR {float(eps):.2f}" if eps else "-"),
+        (f"EPS ({funda.get('period_label') or 'Latest'})", f"PKR {float(eps):.2f}" if eps else "-"),
         ("ROE",              _pct(roe) if roe else "-"),
         ("ROA",              _pct(funda.get("roa")) if funda.get("roa") else "-"),
         ("Profit Margin",    _pct(funda.get("profit_margin"))),

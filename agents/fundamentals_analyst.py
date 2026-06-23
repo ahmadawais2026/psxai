@@ -145,9 +145,17 @@ class FundamentalsAnalystAgent(BaseAgent):
             f"  Debt to Equity: {_fmt_multiple(fundamentals.get('debt_to_equity'))}",
             f"  Beta: {fundamentals.get('beta', 'N/A')}",
             "",
+        ]
+
+        # Period label: 'TTM' when truly computed via stitching,
+        # otherwise the actual period (e.g. '9MFY26', 'FY25') so the
+        # LLM never misrepresents stale annual data as TTM.
+        _period = financials.get('period_label') or financials.get('latest_period') or 'Latest'
+
+        lines += [
             "── INCOME STATEMENT HIGHLIGHTS (Firestore/AskAnalyst) ──",
-            f"  Revenue (TTM): {financials.get('revenue', 'N/A')}",
-            f"  Net Income (TTM): {financials.get('net_income', 'N/A')}",
+            f"  Revenue ({_period}): {financials.get('revenue', 'N/A')}",
+            f"  Net Income ({_period}): {financials.get('net_income', 'N/A')}",
             f"  Operating Margin: {financials.get('operating_margin', 'N/A')}",
             f"  Net Margin: {financials.get('net_margin', 'N/A')}",
             "",
@@ -161,6 +169,12 @@ class FundamentalsAnalystAgent(BaseAgent):
             f"  Operating Cash Flow: {financials.get('operating_cash_flow', 'N/A')}",
             f"  Free Cash Flow: {financials.get('free_cash_flow', 'N/A')}",
         ]
+
+        # Surface the latest interim result so the LLM is never unaware of
+        # the most recent reported period (even when full TTM can't be stitched).
+        _interim_headline = financials.get('latest_interim_headline', '')
+        if _interim_headline:
+            lines.append(f"  Latest reported result: {_interim_headline}")
 
         # ── Automated DCF Valuations ──
         try:
@@ -224,11 +238,20 @@ class FundamentalsAnalystAgent(BaseAgent):
 
             if fcf > 0 and shares > 0:
                 engine = DCFEngine(risk_free_rate=rf_rate) if rf_rate else DCFEngine()
+                # Compute book value per share for DCF sanity check.
+                # equity (total_assets - total_liabilities) and shares are both in
+                # PKR millions, so equity_mn / shares_mn gives PKR per share.
+                _total_assets = _parse_val(financials.get('total_assets'))
+                _total_liab   = _parse_val(financials.get('total_liabilities'))
+                _equity_mn    = _total_assets - _total_liab
+                _bvps = (_equity_mn / shares) if shares > 0 else None
                 dcf_results = engine.generate_scenarios(
                     base_fcf=fcf,
                     levered_beta=beta,
                     shares_outstanding=shares,
-                    historical_growth=hist_growth
+                    historical_growth=hist_growth,
+                    current_price=float(price) if price else None,
+                    book_value_per_share=_bvps if (_bvps and _bvps > 0) else None,
                 )
                 lines.extend([
                     "",
@@ -240,6 +263,31 @@ class FundamentalsAnalystAgent(BaseAgent):
                     "Review the bounded scenarios and sensitivity matrix to inform your valuation verdict.",
                     json.dumps(dcf_results, indent=2)
                 ])
+                # ── DCF Sanity Check ──
+                # Flag any scenario where the DCF value is implausibly high.
+                # Triggered when value > 3x current price/book or 1.5x 52-wk high.
+                flagged_scenarios = [
+                    sc for sc in ("base", "bull", "bear")
+                    if isinstance(dcf_results.get(sc), dict)
+                    and dcf_results[sc].get("sanity_flag")
+                ]
+                if flagged_scenarios:
+                    ceiling = None
+                    for sc in flagged_scenarios:
+                        c = dcf_results[sc].get("sanity_ceiling")
+                        if c and (ceiling is None or c < ceiling):
+                            ceiling = c
+                    lines.extend([
+                        "",
+                        "⚠ DCF SANITY WARNING — CRITICAL INSTRUCTION:",
+                        f"  Flagged scenarios: {', '.join(flagged_scenarios)}",
+                        f"  The DCF values in these scenarios exceed 3× the current price/book value"
+                        + (f" (sanity ceiling: PKR {ceiling:,.2f})." if ceiling else "."),
+                        "  These DCF values are NOT credible and MUST NOT be used as price targets.",
+                        "  You MUST discard the DCF valuation for this company and use RELATIVE",
+                        "  VALUATION instead (P/E vs peers/history, P/B vs ROE, EV/EBITDA).",
+                        "  Explicitly state in your output that the DCF was flagged as non-credible.",
+                    ])
             else:
                 lines.extend([
                     "",

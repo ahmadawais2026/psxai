@@ -407,6 +407,14 @@ RULES:
    - Closes with what you are watching for as a trigger to upgrade or downgrade
    This summary IS the headline paragraph of the research report. Make it count.
 
+10. DIRECTION COHERENCE: Your recommendation direction must be consistent with all evidence:
+    - If EMCS < 5 (Bull/Bear deeply divided) AND Bear conviction > Bull conviction AND risk_score >= 8/10,
+      a bullish recommendation (STRONG BUY / BUY / ACCUMULATE) requires an EXPLICIT justification
+      paragraph in your summary explaining why you disagree with the Bear and Risk agents.
+      Without clear justification the correct call is HOLD, not a bullish stance.
+    - Never recommend STRONG BUY or BUY if Risk Score is 9-10/10 unless there is overwhelming
+      fundamental support and a clear near-term catalyst to justify the risk.
+
 OUTPUT FORMAT — return ONLY a valid JSON object:
 {
   "recommendation": "STRONG BUY|BUY|ACCUMULATE|HOLD|TRIM|SELL|STRONG SELL",
@@ -483,6 +491,10 @@ FINAL_VERDICT_TEMPLATE: str = """You are the Senior Portfolio Manager. Synthesiz
 == BULL vs BEAR DEBATE SUMMARY ==
 {debate_summary}
 == END DEBATE SUMMARY ==
+
+== STRUCTURED SUB-SCORES (for direction coherence — see RULE 10) ==
+{sub_scores}
+== END SUB-SCORES ==
 
 == USER PORTFOLIO CONTEXT ==
 {user_context}

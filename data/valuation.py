@@ -111,12 +111,24 @@ def compute_dcf_scenarios(
         if fcf <= 0 or shares <= 0:
             return None  # DCF not applicable (banks / negative FCFE)
 
+        # Derive book value per share for DCF sanity check.
+        # get_fundamentals stores this as 'book_value' (equity_mn / shares_mn = PKR/share).
+        bvps = None
+        raw_bv = fundamentals.get("book_value")
+        if raw_bv:
+            try:
+                bvps = float(raw_bv)
+            except (TypeError, ValueError):
+                bvps = None
+
         engine = DCFEngine(risk_free_rate=rf_rate) if rf_rate else DCFEngine()
         scenarios = engine.generate_scenarios(
             base_fcf=fcf,
             levered_beta=beta,
             shares_outstanding=shares,
             historical_growth=hist_growth,
+            current_price=price if price > 0 else None,
+            book_value_per_share=bvps if (bvps and bvps > 0) else None,
         )
         if isinstance(scenarios, dict) and "error" in scenarios:
             return None
