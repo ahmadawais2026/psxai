@@ -184,7 +184,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         initTheme();
         setupEventListeners();
         await initFirebase();
-        checkAuthOnLoad();
+        // Guard: checkAuthOnLoad is not defined in this build, and an
+        // undefined-reference here aborts initApp() — which silently kills every
+        // binding that runs after it (e.g. the PDF download button). Auth state
+        // is already handled reactively by onAuthStateChanged in initFirebase().
+        if (typeof checkAuthOnLoad === 'function') checkAuthOnLoad();
         renderRecentSearches();
 
         // ── PREVENT ACCIDENTAL REFRESH DURING ANALYSIS ─────────────
