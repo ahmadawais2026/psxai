@@ -414,6 +414,10 @@ RULES:
       Without clear justification the correct call is HOLD, not a bullish stance.
     - Never recommend STRONG BUY or BUY if Risk Score is 9-10/10 unless there is overwhelming
       fundamental support and a clear near-term catalyst to justify the risk.
+11. RISK & POSITION LEVELS — a technical ATR-based stop-loss PRICE and a risk-based MAXIMUM position
+    size are provided in the "RISK & POSITION LEVELS" block. Treat them as authoritative: cite that
+    exact stop-loss price as THE stop in your prose, and set position_size_pct at or below the risk
+    maximum. Do NOT invent a different stop-loss number, and never size above the risk cap.
 
 OUTPUT FORMAT — return ONLY a valid JSON object:
 {
@@ -426,6 +430,8 @@ OUTPUT FORMAT — return ONLY a valid JSON object:
   "downside_pct": ...,
   "time_horizon": "short_term|medium_term|long_term",
   "position_size_pct": ...,
+  "stop_loss": "the authoritative ATR stop-loss PRICE from the RISK & POSITION LEVELS block",
+  "max_position_pct": "the risk-based maximum position size (do not exceed)",
   "catalysts": ["specific catalyst with expected impact", "..."],
   "risks": ["specific risk with context", "..."],
   "position_advice": "Specific, actionable advice: entry level, sizing, conditions",
@@ -495,6 +501,10 @@ FINAL_VERDICT_TEMPLATE: str = """You are the Senior Portfolio Manager. Synthesiz
 == STRUCTURED SUB-SCORES (for direction coherence — see RULE 10) ==
 {sub_scores}
 == END SUB-SCORES ==
+
+== RISK & POSITION LEVELS (authoritative — use as given, see RULE 11) ==
+{risk_levels}
+== END RISK & POSITION LEVELS ==
 
 == USER PORTFOLIO CONTEXT ==
 {user_context}

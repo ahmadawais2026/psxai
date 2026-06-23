@@ -715,7 +715,8 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     trend = (tech.get("trend") or "unknown").upper()
     tstr  = (tech.get("trend_strength") or "").replace("_", " ").title()
     entry = tech.get("entry_zone") or {}
-    sl_   = tech.get("stop_loss") or 0
+    # Reconciled stop (PM) is the single source of truth; tech value is the source/fallback.
+    sl_   = rec.get("stop_loss") or tech.get("stop_loss") or 0
     tc    = tech.get("confidence") or 0
 
     story.append(_kv_banner(
@@ -877,8 +878,11 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
 
     rlevel   = (risk.get("risk_level")      or "-").replace("_", " ").upper()
     rscore   = risk.get("risk_score")       or 0
-    maxpos   = risk.get("max_position_pct") or 0
-    stoploss = risk.get("stop_loss_pct")    or 0
+    # Prefer the Portfolio Manager's reconciled stop/position (single source of
+    # truth) so the risk page, technical page, and final verdict all agree;
+    # fall back to the risk agent's own values when unreconciled.
+    maxpos   = rec.get("max_position_pct") or risk.get("max_position_pct") or 0
+    stoploss = rec.get("stop_loss_pct")    or risk.get("stop_loss_pct")    or 0
     rconf    = risk.get("confidence")       or 0
 
     story.append(_kv_banner(
@@ -1009,6 +1013,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         ("Valuation",        verdict),
         ("Price Target",     f"PKR {float(pt_low):,.0f} - {float(pt_high):,.0f}" if (pt_low and pt_high) else "-"),
         ("Upside Potential", f"{float(upside):+.1f}%" if upside else "-"),
+        ("Stop Loss",        f"PKR {float(rec.get('stop_loss')):,.2f}" if rec.get("stop_loss") else "-"),
         ("Max Position",     f"{maxpos}%" if maxpos else "-"),
     ]
     mid2 = (len(summary_items) + 1) // 2

@@ -339,6 +339,28 @@ def format_market_context_text(ctx: Dict[str, Any]) -> str:
     """
     lines: List[str] = []
 
+    # ── AUTHORITATIVE LIVE MACRO (highest priority — overrides stale prose) ──
+    # The live SBP policy rate is stated up front and flagged authoritative so the
+    # LLM does not anchor on stale broker notes (e.g. an old "easing to 10.5%"
+    # narrative) when the rate has since changed.
+    _macro = ctx.get("macro")
+    if _macro and isinstance(_macro, dict) and _macro.get("sbp_policy_rate_pct") is not None:
+        _rate    = _macro.get("sbp_policy_rate_pct")
+        _dec     = _macro.get("sbp_decision", "")
+        _decdate = _macro.get("sbp_decision_date", "")
+        _asof    = _macro.get("as_of", "")
+        lines.append("══ LIVE MACRO — AUTHORITATIVE (use as the CURRENT state) ══")
+        lines.append(
+            f"  SBP Policy Rate is {_rate}% RIGHT NOW"
+            + (f" ({_dec} on {_decdate})" if (_dec or _decdate) else "")
+            + (f" — snapshot as of {_asof}." if _asof else ".")
+        )
+        lines.append(
+            "  Any broker note, research excerpt, or recollection below that cites a "
+            "DIFFERENT current policy rate is STALE — use it only as explicitly-dated "
+            "history, never as the present rate.\n"
+        )
+
     # Morning briefing — headlines only (market data already in macro snapshot)
     briefing = ctx.get("morning_briefing")
     if isinstance(briefing, dict):

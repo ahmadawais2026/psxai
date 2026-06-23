@@ -18,6 +18,16 @@ from agents.prompts import FINAL_VERDICT_TEMPLATE, PORTFOLIO_MANAGER_PERSONA, DI
 logger = logging.getLogger(__name__)
 
 
+def _to_float(val: Any) -> float:
+    """Coerce a value to float, returning 0.0 for None/blank/non-numeric."""
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class PortfolioManagerAgent(BaseAgent):
     """Compiles individual advisor insights and runs final recommendation logic."""
 
@@ -111,6 +121,13 @@ class PortfolioManagerAgent(BaseAgent):
                                  sent_report.get("confidence") or 5)
         tech_trend       = (tech_report.get("trend") or "neutral").lower()
 
+        # Authoritative stop/position levels (single source of truth, Round 3 / Fix D):
+        # the technical ATR stop PRICE and the risk-based max position. These are fed
+        # to the LLM as given so its prose cannot invent a contradictory third number.
+        tech_stop   = _to_float(tech_report.get("stop_loss"))
+        risk_maxpos = _to_float(risk_report.get("max_position_pct"))
+        risk_stoppct = _to_float(risk_report.get("stop_loss_pct"))
+
         # ── Step 3: Query Gemini ──────────────────────────────────────────────
         sub_score_block = (
             f"Risk Score: {risk_score:.0f}/10\n"
@@ -120,6 +137,13 @@ class PortfolioManagerAgent(BaseAgent):
             f"Sentiment Score: {sentiment_score:.0f}/10\n"
             f"Technical Trend: {tech_trend}"
         )
+        risk_levels_block = (
+            f"Authoritative Stop-Loss (technical ATR): "
+            f"{('PKR %.2f' % tech_stop) if tech_stop else 'not provided'}\n"
+            f"Maximum Position Size (risk-based cap): "
+            f"{('%.2f%%' % risk_maxpos) if risk_maxpos else 'not provided'}\n"
+            f"Cite the stop-loss price above as THE stop; do not exceed the position cap."
+        )
         prompt = FINAL_VERDICT_TEMPLATE.format(
             all_reports=reports_json,
             debate_summary=debate_json,
@@ -127,6 +151,7 @@ class PortfolioManagerAgent(BaseAgent):
             calibration_context=(calibration_context or
                 "TRACK RECORD: not available for this run."),
             sub_scores=sub_score_block,
+            risk_levels=risk_levels_block,
         )
 
         report = self.query_json(prompt)
@@ -180,6 +205,33 @@ class PortfolioManagerAgent(BaseAgent):
                 )
         except Exception as exc:
             self._log(f"Coherence guard skipped: {exc}")
+
+        # ── Step 3d: Reconcile stop-loss & position size (single source of truth) ──
+        # One authoritative stop = the technical ATR price. Render it as a price
+        # (technical page) and a derived % (risk page); cap the position at the
+        # risk maximum. This kills the 3-different-stops / 2-different-sizes problem.
+        try:
+            price = _to_float(report.get("current_price"))
+            stop_price = tech_stop or 0.0
+            # Fallback: if technical didn't supply a stop, derive one from the
+            # risk loss-budget % so we still publish a single coherent number.
+            if not stop_price and price and risk_stoppct:
+                stop_price = round(price * (1.0 - risk_stoppct / 100.0), 2)
+            if stop_price:
+                report["stop_loss"] = stop_price
+                if price:
+                    # Derived %, consistent with the same stop price.
+                    report["stop_loss_pct"] = round((price - stop_price) / price * 100.0, 2)
+                elif risk_stoppct:
+                    report["stop_loss_pct"] = risk_stoppct
+
+            # Position size: the most conservative of the LLM's pick and the risk cap.
+            pm_size = _to_float(report.get("position_size_pct")) or _to_float(report.get("max_position_pct"))
+            candidates = [v for v in (pm_size, risk_maxpos) if v > 0]
+            if candidates:
+                report["max_position_pct"] = round(min(candidates), 2)
+        except Exception as exc:
+            self._log(f"Stop/position reconciliation skipped: {exc}")
 
         # Attach standard disclaimer and symbol reference
         report["symbol"] = symbol.upper()
