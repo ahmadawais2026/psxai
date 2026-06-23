@@ -378,11 +378,21 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
             query = f'"{clean_sym}" Pakistan PSX stock'
         logger.info(f"Supplementing with Google News RSS Tier 3 (query: {query})")
         rss_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
+        # news.google.com intermittently throttles the shared cloud egress IP
+        # with a transient non-200 (usually 429); retry with backoff so a single
+        # throttle doesn't leave the analysis with zero news. One success per
+        # hour is enough — the result is cached for CACHE_TTL_NEWS.
         try:
-            response = scraper.get(rss_url, timeout=10)
-            if response.status_code != 200:
-                logger.warning(f"Tier 3 Google News RSS for {clean_sym}: HTTP {response.status_code} (likely throttled/blocked from this IP)")
-            if response.status_code == 200:
+            import time
+            response = None
+            for _attempt in range(3):
+                response = scraper.get(rss_url, timeout=10)
+                if response.status_code == 200:
+                    break
+                logger.warning(f"Tier 3 Google News RSS for {clean_sym}: HTTP {response.status_code} on attempt {_attempt + 1}/3 (throttled?)")
+                if _attempt < 2:
+                    time.sleep(2 * (_attempt + 1))  # 2s, then 4s
+            if response is not None and response.status_code == 200:
                 root = ET.fromstring(response.content)
                 _rss_items = root.findall('./channel/item')
                 logger.info(f"Tier 3 Google News RSS for {clean_sym}: HTTP 200, {len(_rss_items)} items returned")
