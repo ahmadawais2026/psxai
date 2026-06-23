@@ -32,17 +32,21 @@ class PortfolioManagerAgent(BaseAgent):
         symbol: str,
         analyst_reports: Dict[str, Any],
         debate_result: Dict[str, Any],
-        user_context: Optional[Dict[str, Any]] = None
+        user_context: Optional[Dict[str, Any]] = None,
+        calibration_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Produce a final investment recommendation for *symbol*.
-        
+
         Args:
             symbol: Ticker symbol.
             analyst_reports: Dictionary containing the reports from the 4 analyst agents.
             debate_result: Results from the Bull vs Bear debate committee.
             user_context: User holding context dict (from portfolio/manager).
-            
+            calibration_context: Distilled track-record block (learning/calibration)
+                injected as a prior — how this system's past calls on this name/
+                sector actually fared vs the KSE-100.
+
         Returns:
             Dict: Final recommendation JSON report conforming to PORTFOLIO_MANAGER_PERSONA.
         """
@@ -89,7 +93,9 @@ class PortfolioManagerAgent(BaseAgent):
         prompt = FINAL_VERDICT_TEMPLATE.format(
             all_reports=reports_json,
             debate_summary=debate_json,
-            user_context=context_summary
+            user_context=context_summary,
+            calibration_context=(calibration_context or
+                "TRACK RECORD: not available for this run.")
         )
         
         report = self.query_json(prompt)

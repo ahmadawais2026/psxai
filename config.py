@@ -45,7 +45,26 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 # ── Per-Role Model Routing ────────────────────────────────────
 # Bump whenever the routing maps below change, so cached analyses re-run.
-ROUTING_VERSION = "r1"
+# NOTE: also bump this when the learned-context injection (Phase 2 flywheel)
+# goes live, so a stale cached dossier isn't served as if it had incorporated
+# the track-record feedback.
+# r2: Portfolio Manager prompt now carries the {calibration_context} track-record
+#     block (learning flywheel) — bumped so pre-learning cached dossiers re-run.
+ROUTING_VERSION = "r2"
+
+# ── Learning Loop / Recommendation Ledger ─────────────────────
+# Durable, append-only store of every recommendation (NOT the TTL'd "cache"
+# collection) plus the realized outcomes the scorer backfills. This is the hub
+# the self-improvement flywheel and the forecast track-record read from.
+RECOMMENDATIONS_COLLECTION = "recommendations"
+LESSONS_COLLECTION = "lessons"
+
+# Forward-return horizons the outcome scorer evaluates each call against,
+# expressed in calendar days (mapped to the nearest available trading bar).
+OUTCOME_HORIZONS = {"1w": 7, "1m": 30, "3m": 90}
+
+# KSE-100 benchmark symbol used for excess-return (alpha) scoring.
+BENCHMARK_SYMBOL = "KSE100"
 
 # Tier → concrete first-party Gemini model (served via Vertex AI, credit-covered).
 # Only first-party Gemini is used: the free-trial credit covers Vertex AI Gemini

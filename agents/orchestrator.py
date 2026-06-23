@@ -141,7 +141,8 @@ class Orchestrator:
                 symbol=state["symbol"],
                 analyst_reports=reports,
                 debate_result=state["debate_result"],
-                user_context=state["user_context"]
+                user_context=state["user_context"],
+                calibration_context=state["agent_context"].get("calibration_context", "")
             )
             return {"recommendation": rec}
 
@@ -228,7 +229,8 @@ class Orchestrator:
                     symbol=symbol,
                     analyst_reports=analyst_reports,
                     debate_result=cached_report["debate"],
-                    user_context=user_context
+                    user_context=user_context,
+                    calibration_context=self._calibration_context(symbol, cached_report.get("sector"))
                 )
                 report_copy = dict(cached_report)
                 report_copy["recommendation"] = final_recommendation
@@ -309,7 +311,11 @@ class Orchestrator:
             "institutional_flows": flows_context,
             "retail_sentiment": retail_context,
         }
-        
+
+        # Outcome-RAG: distilled track record (realized outcomes vs KSE-100) for
+        # this name/sector, injected as a prior into the Portfolio Manager.
+        agent_context["calibration_context"] = self._calibration_context(symbol, sector)
+
         yield {"event": "data_fetch", "status": "done"}
 
         general_context = {
@@ -337,6 +343,11 @@ class Orchestrator:
 
         current_state = initial_state.copy()
 
+        # Computed once after the pipeline and reused by both the cached copy
+        # (finally block) and the streamed dossier (Step 6).
+        forecast_payload = None
+        ledger_id = None
+
         # Stream events from LangGraph
         try:
             for step_event in self.graph.stream(initial_state, {"recursion_limit": 50}):
@@ -357,6 +368,12 @@ class Orchestrator:
         finally:
             # Cache the report even if the client disconnected, provided we got the recommendation
             if current_state.get("recommendation"):
+                # Multi-horizon price forecast (DCF-anchored OU Monte-Carlo cone).
+                forecast_payload = self._compute_forecast(
+                    symbol, quote,
+                    current_state.get("fundamental_report"),
+                    agent_context.get("macro_context"),
+                )
                 debate_res = current_state.get("debate_result", {})
                 general_report = {
                     "symbol": symbol,
@@ -377,8 +394,20 @@ class Orchestrator:
                         "disagreements": debate_res.get("disagreements", [])
                     },
                     "recommendation": current_state.get("recommendation"),
+                    "forecast": forecast_payload,
                     "disclaimer": DISCLAIMER
                 }
+                # Durable, append-only ledger write — the hub of the learning
+                # flywheel. Recorded BEFORE caching so the doc id is stamped onto
+                # both copies. Best-effort: a ledger failure never breaks analysis.
+                try:
+                    from learning.ledger import record_recommendation
+                    ledger_id = record_recommendation(general_report)
+                    if ledger_id:
+                        general_report["recommendation_id"] = ledger_id
+                except Exception as exc:
+                    logger.warning(f"Ledger record failed (non-fatal): {exc}")
+
                 set_cached(cache_key, general_report)
                 logger.info(f"General report cached successfully in finally block for symbol: {symbol}")
 
@@ -404,9 +433,11 @@ class Orchestrator:
                 "disagreements": debate_res.get("disagreements", [])
             },
             "recommendation": current_state.get("recommendation"),
+            "forecast": forecast_payload,
+            "recommendation_id": ledger_id,
             "disclaimer": DISCLAIMER
         }
-        
+
         if has_active_holdings:
             logger.info(f"Generating custom recommendation for user context...")
             yield {"event": "node_finish", "node": "portfolio_custom"}
@@ -420,7 +451,8 @@ class Orchestrator:
                 symbol=symbol,
                 analyst_reports=analyst_reports,
                 debate_result=debate_res,
-                user_context=user_context
+                user_context=user_context,
+                calibration_context=agent_context.get("calibration_context", "")
             )
             custom_report = dict(general_report)
             custom_report["recommendation"] = final_recommendation
@@ -428,6 +460,56 @@ class Orchestrator:
         else:
             yield {"event": "complete", "report": general_report}
 
+
+    def _calibration_context(self, symbol: str, sector: Optional[str] = None) -> str:
+        """Distilled track-record block for the Portfolio Manager (best-effort)."""
+        try:
+            from learning.calibration import build_calibration_context
+            return build_calibration_context(symbol, sector)
+        except Exception as exc:
+            logger.warning(f"Calibration context failed (non-fatal) for {symbol}: {exc}")
+            return ""
+
+    def _compute_forecast(
+        self,
+        symbol: str,
+        quote: Dict[str, Any],
+        fundamental_report: Optional[Dict[str, Any]],
+        macro_context: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Build the multi-horizon price cone, anchored to the DCF Base value.
+
+        Reuses ``raw_fundamentals`` / ``raw_financials`` already on the fundamental
+        report so the DCF inputs aren't refetched. Best-effort: any failure returns
+        ``None`` and the dossier simply ships without a forecast chart.
+        """
+        try:
+            from data.market_data import get_history
+            from data.valuation import compute_dcf_scenarios, extract_anchors
+            from data.forecast_engine import forecast_price_cone
+
+            hist = get_history(symbol)  # daily, 1y (config.HISTORY_PERIOD_DAILY)
+            if hist is None or len(hist) < 20:
+                logger.info(f"Forecast skipped for {symbol}: insufficient price history.")
+                return None
+
+            fr = fundamental_report or {}
+            scenarios = compute_dcf_scenarios(
+                symbol,
+                fundamentals=fr.get("raw_fundamentals"),
+                financials=fr.get("raw_financials"),
+                quote=quote,
+                macro_context=macro_context,
+            )
+            anchors = extract_anchors(scenarios)
+            return forecast_price_cone(
+                hist,
+                current_price=(quote or {}).get("price"),
+                dcf_anchors=anchors,
+            )
+        except Exception as exc:
+            logger.warning(f"Forecast computation failed (non-fatal) for {symbol}: {exc}")
+            return None
 
     def quick_quote(self, symbol: str) -> Dict[str, Any]:
         """Fetch quick stock quote information."""

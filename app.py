@@ -388,6 +388,40 @@ def add_holding():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/feedback", methods=["POST"])
+def submit_feedback():
+    """
+    Record user feedback against a stored recommendation (learning flywheel).
+    Request body: {"recommendation_id": "...", "rating": "agree|disagree",
+                   "action": "bought|sold|held|none", "note": "..."}
+    """
+    try:
+        uid = _get_authenticated_uid(request)  # may be None for anonymous use
+        data = request.get_json(force=True) or {}
+        rec_id = (data.get("recommendation_id") or "").strip()
+        if not rec_id:
+            return jsonify({"error": "recommendation_id is required"}), 400
+
+        rating = data.get("rating")
+        if rating not in (None, "agree", "disagree"):
+            return jsonify({"error": "rating must be 'agree' or 'disagree'"}), 400
+
+        feedback = {
+            "uid": uid,
+            "rating": rating,
+            "action": data.get("action"),
+            "note": (data.get("note") or "")[:1000],
+            "symbol": (data.get("symbol") or "").strip().upper() or None,
+        }
+
+        from learning.ledger import attach_feedback
+        if attach_feedback(rec_id, feedback):
+            return jsonify({"success": True})
+        return jsonify({"error": "Could not record feedback (unknown id or store unavailable)."}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/portfolio/<symbol>", methods=["DELETE"])
 def remove_holding(symbol: str):
     """Remove a holding from the portfolio."""

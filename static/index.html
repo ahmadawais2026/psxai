@@ -272,6 +272,18 @@
                         </div>
                     </article>
                 </div>
+
+                <!-- Price Forecast Cone (multi-horizon OU Monte-Carlo) -->
+                <article class="agent-card glass-card forecast-card" id="forecast-card" hidden>
+                    <div class="card-header">
+                        <h3 class="card-title">Price Forecast — Probability Cone</h3>
+                        <span id="forecast-model-badge" class="badge badge--neutral">--</span>
+                    </div>
+                    <div class="card-body" style="position: relative; height:340px; width:100%">
+                        <canvas id="forecast-chart"></canvas>
+                    </div>
+                    <p class="text-muted" id="forecast-disclaimer" style="padding: 0 1.25rem 1.25rem; font-size: 0.8rem;"></p>
+                </article>
             </div>
 
             <!-- Debate Section -->

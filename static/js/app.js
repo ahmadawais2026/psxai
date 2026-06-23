@@ -152,7 +152,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const dcfIntrinsicBadge = document.getElementById('dcf-intrinsic-badge');
     const dcfMatrixContainer = document.getElementById('dcf-matrix-container');
 
+    // Price Forecast Cone
+    const forecastCard = document.getElementById('forecast-card');
+    const forecastChartCanvas = document.getElementById('forecast-chart');
+    const forecastModelBadge = document.getElementById('forecast-model-badge');
+    const forecastDisclaimer = document.getElementById('forecast-disclaimer');
+
     let currentRadarChart = null; // Store chart instance
+    let currentForecastChart = null; // Store forecast chart instance
     // Auth Form State
     let authMode = 'login'; // 'login' or 'signup'
 
@@ -1178,6 +1185,93 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 8. Render Visual Heuristics & DCF
         renderVisualHeuristics(report);
+
+        // 9. Render Price Forecast Cone
+        renderForecastChart(report.forecast);
+    }
+
+    function renderForecastChart(forecast) {
+        // Forecast is best-effort upstream; hide the card when absent (e.g. banks
+        // with no DCF anchor still get a cone, but a hard failure yields null).
+        if (currentForecastChart) {
+            currentForecastChart.destroy();
+            currentForecastChart = null;
+        }
+        if (!forecast || !Array.isArray(forecast.horizons) || forecast.horizons.length === 0) {
+            if (forecastCard) forecastCard.setAttribute('hidden', '');
+            return;
+        }
+        if (forecastCard) forecastCard.removeAttribute('hidden');
+
+        const spot = forecast.current_price;
+        const h = forecast.horizons;
+        // x-axis: "Now" anchor + each horizon; cone emanates from the spot price.
+        const labels = ['Now', ...h.map(p => p.date || `+${p.t_days}d`)];
+        const at = (key) => [spot, ...h.map(p => p[key])];
+
+        const transparent = 'rgba(0,0,0,0)';
+        const line = (label, data, opts = {}) => Object.assign({
+            label, data, borderWidth: 0, pointRadius: 0, fill: false,
+            tension: 0.3, borderColor: transparent,
+        }, opts);
+
+        const anchors = forecast.anchors || {};
+        const anchorLine = (label, val, color) => val ? line(label, labels.map(() => val), {
+            borderColor: color, borderWidth: 1.5, borderDash: [6, 4], tension: 0,
+        }) : null;
+
+        const datasets = [
+            // Outer band p10–p90 (light). p90 fills down to the preceding p10 dataset.
+            line('p10', at('p10')),
+            line('p90', at('p90'), { fill: '-1', backgroundColor: 'rgba(16,185,129,0.10)' }),
+            // Inner band p25–p75 (darker), drawn on top.
+            line('p25', at('p25')),
+            line('p75', at('p75'), { fill: '-1', backgroundColor: 'rgba(16,185,129,0.22)' }),
+            // Median path.
+            line('Median (p50)', at('p50'), { borderColor: '#10b981', borderWidth: 2 }),
+            anchorLine('DCF Base', anchors.base, '#f59e0b'),
+            anchorLine('DCF Bull', anchors.bull, '#22d3ee'),
+            anchorLine('DCF Bear', anchors.bear, '#f87171'),
+        ].filter(Boolean);
+
+        if (forecastModelBadge) {
+            const labelByModel = { ou_dcf_anchored: 'DCF-anchored', gbm_damped: 'Volatility cone' };
+            forecastModelBadge.textContent = `${labelByModel[forecast.model] || forecast.model} · σ ${forecast.vol_annualized_pct}%/yr`;
+        }
+        if (forecastDisclaimer) forecastDisclaimer.textContent = forecast.disclaimer || '';
+
+        const ctx = forecastChartCanvas.getContext('2d');
+        currentForecastChart = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.06)' }, ticks: { color: '#94a3b8', font: { size: 11 } } },
+                    y: {
+                        grid: { color: 'rgba(255,255,255,0.08)' },
+                        ticks: { color: '#94a3b8', font: { size: 11 }, callback: (v) => `PKR ${formatNumberWithCommas(v)}` },
+                    },
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        labels: {
+                            color: '#94a3b8', boxWidth: 14, font: { size: 11 },
+                            // Hide the invisible band-edge helper lines from the legend.
+                            filter: (item) => !['p10', 'p90', 'p25', 'p75'].includes(item.text),
+                        },
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (c) => c.dataset.label.startsWith('p') ? null : `${c.dataset.label}: PKR ${formatNumberWithCommas(Math.round(c.parsed.y))}`,
+                        },
+                    },
+                },
+            },
+        });
     }
 
     // ── VIEW RENDERING HELPERS ───────────────────────────────────────
@@ -1769,6 +1863,60 @@ document.addEventListener('DOMContentLoaded', async () => {
             reasoningText.textContent = rec.summary;
         } else {
             verdictReasoning.setAttribute('hidden', '');
+        }
+
+        // Feedback bar (learning flywheel) — capture agree/disagree on this call.
+        renderFeedbackBar();
+    }
+
+    function renderFeedbackBar() {
+        const verdictCard = document.getElementById('verdict-card');
+        if (!verdictCard) return;
+        const recId = currentReport && currentReport.recommendation_id;
+
+        let bar = document.getElementById('feedback-bar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'feedback-bar';
+            bar.style.cssText = 'display:flex;align-items:center;gap:.6rem;margin-top:1rem;padding-top:1rem;border-top:1px solid rgba(255,255,255,0.08);font-size:.85rem;color:#94a3b8;flex-wrap:wrap;';
+            verdictCard.appendChild(bar);
+        }
+        // No durable id (e.g. ledger/Firestore unavailable) → nothing to attach to.
+        if (!recId) { bar.setAttribute('hidden', ''); return; }
+        bar.removeAttribute('hidden');
+        bar.innerHTML = `
+            <span>Was this call useful?</span>
+            <button type="button" class="feedback-btn" data-rating="agree" style="cursor:pointer;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.4);color:#10b981;border-radius:8px;padding:.3rem .7rem;">👍 Agree</button>
+            <button type="button" class="feedback-btn" data-rating="disagree" style="cursor:pointer;background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.4);color:#f87171;border-radius:8px;padding:.3rem .7rem;">👎 Disagree</button>
+            <span class="feedback-ack" hidden>Thanks — logged for future calibration.</span>`;
+        bar.querySelectorAll('.feedback-btn').forEach(btn => {
+            btn.addEventListener('click', () => submitFeedback(recId, btn.dataset.rating, bar));
+        });
+    }
+
+    async function submitFeedback(recId, rating, bar) {
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            const u = firebase.auth().currentUser;
+            if (u) {
+                try { headers['Authorization'] = `Bearer ${await u.getIdToken()}`; } catch (_) {}
+            }
+            const res = await fetch(`${API_BASE}/api/feedback`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    recommendation_id: recId,
+                    rating,
+                    symbol: currentReport && currentReport.symbol
+                })
+            });
+            if (res.ok) {
+                const ack = bar.querySelector('.feedback-ack');
+                if (ack) ack.removeAttribute('hidden');
+                bar.querySelectorAll('.feedback-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+            }
+        } catch (e) {
+            /* non-fatal — feedback is best-effort */
         }
     }
 

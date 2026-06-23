@@ -485,6 +485,10 @@ FINAL_VERDICT_TEMPLATE: str = """You are the Senior Portfolio Manager. Synthesiz
 {user_context}
 == END USER CONTEXT ==
 
+== SYSTEM TRACK RECORD (learned from realized outcomes) ==
+{calibration_context}
+== END TRACK RECORD ==
+
 Generate your recommendation following your output format.
 
 CRITICAL INSTRUCTION FOR YOUR SUMMARY:
