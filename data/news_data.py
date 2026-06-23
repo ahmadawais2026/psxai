@@ -59,6 +59,35 @@ def _deduplicate_articles(articles: List[Dict[str, Any]], threshold: float = 0.6
             unique_articles.append(item)
     return unique_articles
 
+def _article_matches_company(
+    title: str,
+    desc: str,
+    clean_sym: str,
+    company_name: str = "",
+    prefix: bool = False,
+) -> bool:
+    """True if the article text references the target company.
+
+    ``prefix=True`` matches the ticker at a word-start only (no trailing word
+    boundary), so brand variants like 'OGDCL' match the ticker 'OGDC'. Looser
+    matches are refined downstream by the fail-open LLM entity filter, so the
+    prefix mode is safe for direct-source feeds (e.g. Business Recorder).
+    """
+    text = f"{title or ''}\n{desc or ''}"
+    pat = rf"\b{re.escape(clean_sym)}" if prefix else rf"\b{re.escape(clean_sym)}\b"
+    if re.search(pat, text, re.IGNORECASE):
+        return True
+    # First-word name fallback is too noisy for the broad BRecorder feeds — e.g.
+    # "Pakistan State Oil"/"Pakistan Stock Exchange" -> "Pakistan", which matches
+    # nearly every PK business headline. Only use it in exact (non-prefix) mode,
+    # where the source feed is already entity-scoped. In prefix mode the ticker
+    # match alone is the signal (BRecorder reliably writes OGDCL/PSO/AGP/HUBCO).
+    if company_name and not prefix:
+        first_word = company_name.split()[0]
+        if len(first_word) > 3 and re.search(rf"\b{re.escape(first_word)}\b", text, re.IGNORECASE):
+            return True
+    return False
+
 def filter_news_with_llm(symbol: str, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     LLM-Powered Entity Resolution (RAG pass 1).
@@ -266,8 +295,65 @@ def fetch_mettis_announcements(symbol: str) -> List[Dict[str, Any]]:
                 })
     except Exception as e:
         logger.error(f"Failed to fetch Mettis Global for {symbol}: {e}")
-        
+
     return extracted
+
+
+# Business Recorder has no per-company feed and its on-site search is a
+# client-side Google Custom Search widget (not server-scrapeable). Its category
+# feeds, however, are clean RSS with full HTML summaries. We pull these and
+# filter to the target company. BRecorder is NOT indexed by Google News (a query
+# for a high-coverage name returns dozens of items across other PK outlets and
+# zero from brecorder.com), so these feeds are the ONLY way to surface its PSX
+# coverage in the pipeline. They are a recent rolling window (~30-40 items each),
+# so this catches current/material company news (mergers, results), not history.
+BRECORDER_FEEDS = [
+    "https://www.brecorder.com/feeds/business",   # highest company yield (PSX, results)
+    "https://www.brecorder.com/feeds/pakistan",   # national / corporate
+    "https://www.brecorder.com/feeds/markets",    # PSX index + commodity-driven names
+]
+
+
+def fetch_brecorder_news(symbol: str, company_name: str = "") -> List[Dict[str, Any]]:
+    """
+    Tier 0.3: Business Recorder category feeds, filtered to the target company.
+    Mirrors the RSS parse in fetch_market_intelligence._parse_rss (incl. the
+    ISO-8859-1 encoding normalization) and reuses the module-level cloudscraper.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for feed_url in BRECORDER_FEEDS:
+        try:
+            r = scraper.get(feed_url, timeout=10)
+            if r.status_code != 200:
+                logger.warning(f"BRecorder feed {feed_url} for {symbol}: HTTP {r.status_code}")
+                continue
+            content = r.content
+            # Some BRecorder feeds declare ISO-8859-1; re-encode so ET parses cleanly.
+            if b"ISO-8859-1" in content[:200] or b"iso-8859-1" in content[:200]:
+                content = content.decode("iso-8859-1").encode("utf-8")
+                content = content.replace(b"ISO-8859-1", b"UTF-8").replace(b"iso-8859-1", b"UTF-8")
+            root = ET.fromstring(content)
+            for item in root.findall("./channel/item"):
+                title = (item.findtext("title") or "").strip()
+                desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
+                if not title or title in seen:
+                    continue
+                if not _article_matches_company(title, desc, symbol, company_name, prefix=True):
+                    continue
+                seen.add(title)
+                out.append({
+                    "title": title,
+                    "link": (item.findtext("link") or "").strip(),
+                    "published": (item.findtext("pubDate") or "").strip(),
+                    "source": "Business Recorder",
+                    "summary": desc[:400],
+                })
+        except Exception as e:
+            logger.warning(f"BRecorder feed {feed_url} failed for {symbol}: {e}")
+    if out:
+        logger.info(f"Business Recorder Tier 0.3: matched {len(out)} articles for {symbol}")
+    return out
 
 
 def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
@@ -307,7 +393,15 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
         if ann["title"] not in seen_titles:
             seen_titles.add(ann["title"])
             raw_articles.append(ann)
-            
+
+    # Tier 0.3: Business Recorder category feeds (absent from Google News, so this
+    # is the only path to BRecorder's PSX coverage). Routed through the fail-open
+    # LLM entity filter below (source not in the trusted Tier-0 bypass set).
+    for ann in fetch_brecorder_news(clean_sym, company_name):
+        if ann["title"] not in seen_titles:
+            seen_titles.add(ann["title"])
+            raw_articles.append(ann)
+
     # Tier 1: Try AskAnalyst endpoints via cloudscraper
     if company_id:
         try:
@@ -340,16 +434,7 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
             for item in items:
                 title = item.get("title", "")
                 desc = item.get("description", "")
-                match = False
-                if re.search(rf"\b{clean_sym}\b", title, re.IGNORECASE) or re.search(rf"\b{clean_sym}\b", desc, re.IGNORECASE):
-                    match = True
-                elif company_name:
-                    first_word = company_name.split()[0]
-                    if len(first_word) > 3:
-                        if re.search(rf"\b{first_word}\b", title, re.IGNORECASE) or re.search(rf"\b{first_word}\b", desc, re.IGNORECASE):
-                            match = True
-                            
-                if match:
+                if _article_matches_company(title, desc, clean_sym, company_name):
                     title_clean = title.strip()
                     if title_clean and title_clean not in seen_titles:
                         seen_titles.add(title_clean)
