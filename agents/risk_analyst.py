@@ -78,30 +78,6 @@ class RiskAnalystAgent(BaseAgent):
         """
         self._log(f"Starting risk analysis for {symbol} …")
 
-        # ── Step 1: Fetch price histories (hard timeout on every call) ──
-        stock_df = _fetch_with_timeout(
-            get_history, symbol, HISTORY_PERIOD_DAILY, "1d",
-            label=f"stock_history:{symbol}"
-        )
-        if stock_df is None or stock_df.empty:
-            self._log("Stock history unavailable — returning error report.")
-            return self._error_report(symbol, "No historical data to compute risk metrics.")
-        self._log(f"Fetched stock history ({len(stock_df)} bars).")
-
-        # KSE-100 index — use PSX DPS native ticker (dps.psx.com.pk/timeseries/eod/KSE100)
-        # Note: ^KSE and KSE100.KA are Yahoo Finance tickers which no longer return data.
-        # The correct PSX Data Portal symbol is simply 'KSE100'.
-        index_df = None
-        for idx_sym in ["KSE100", "^KSE"]:
-            result = _fetch_with_timeout(
-                get_history, idx_sym, HISTORY_PERIOD_DAILY, "1d",
-                label=f"index_history:{idx_sym}"
-            )
-            if result is not None and not result.empty:
-                index_df = result
-                self._log(f"Fetched index history from {idx_sym} ({len(index_df)} bars).")
-                break
-
         # USD/PKR exchange rate for Adler-Dumas FX exposure
         def _fetch_fx():
             import requests
@@ -140,7 +116,48 @@ class RiskAnalystAgent(BaseAgent):
                 logger.warning(f"REST FX history fetch failed for PKR=X: {e}")
             return None
 
-        fx_df = _fetch_with_timeout(_fetch_fx, label="PKR=X FX history")
+        # ── Step 1: Fetch market data CONCURRENTLY (each call hard-capped) ──
+        # stock history, KSE-100 index, FX, and the quote are independent. They
+        # used to run sequentially (4×8s + LLM retries), which blew the node's
+        # timeout. Running them in parallel keeps the node well under budget.
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Reuse the orchestrator's shared quote when present — avoids a network
+        # round-trip and keeps the price consistent with the rest of the report.
+        ctx_quote = (context or {}).get("quote") if context else None
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_stock = pool.submit(
+                _fetch_with_timeout, get_history, symbol, HISTORY_PERIOD_DAILY, "1d",
+                label=f"stock_history:{symbol}"
+            )
+            # KSE100 is the canonical PSX Data Portal index symbol (^KSE/KSE100.KA
+            # are dead Yahoo tickers); ^KSE is only a last-resort fallback below.
+            f_index = pool.submit(
+                _fetch_with_timeout, get_history, "KSE100", HISTORY_PERIOD_DAILY, "1d",
+                label="index_history:KSE100"
+            )
+            f_fx = pool.submit(_fetch_with_timeout, _fetch_fx, label="PKR=X FX history")
+            f_quote = (None if ctx_quote else
+                       pool.submit(_fetch_with_timeout, get_quote, symbol, label=f"quote:{symbol}"))
+
+            stock_df = f_stock.result()
+            index_df = f_index.result()
+            fx_df = f_fx.result()
+            quote = ctx_quote or (f_quote.result() if f_quote else {}) or {}
+
+        if stock_df is None or stock_df.empty:
+            self._log("Stock history unavailable — returning error report.")
+            return self._error_report(symbol, "No historical data to compute risk metrics.")
+        self._log(f"Fetched stock history ({len(stock_df)} bars).")
+
+        if index_df is None or index_df.empty:
+            index_df = _fetch_with_timeout(
+                get_history, "^KSE", HISTORY_PERIOD_DAILY, "1d", label="index_history:^KSE"
+            )
+        if index_df is not None and not index_df.empty:
+            self._log(f"Fetched index history ({len(index_df)} bars).")
+
         if fx_df is not None:
             self._log(f"Fetched PKR=X FX history ({len(fx_df)} bars).")
         else:
@@ -165,10 +182,8 @@ class RiskAnalystAgent(BaseAgent):
 
         metrics["advanced"] = advanced_risk
 
-        # ── Step 3: Current quote ────────────────────────────────
-        quote = _fetch_with_timeout(get_quote, symbol, label=f"quote:{symbol}") or {}
-
         # ── Step 4: Format data blob ─────────────────────────────
+        # (quote was fetched alongside the histories in Step 1)
         data_blob = self._build_data_blob(symbol, quote, metrics, portfolio_context, context or {})
 
         # ── Step 5: Query Gemini ──────────────────────────────────

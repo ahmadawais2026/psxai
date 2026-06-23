@@ -169,6 +169,22 @@ class SentimentAnalystAgent(BaseAgent):
         report["adjusted_score"] = adjusted_score
         report["weight_multiplier"] = weight
 
+        # ── Presentation contract for the PDF/UI summary banner ────
+        # The sentiment LLM emits direction/magnitude only; the report banner
+        # (report/pdf_generator.py) expects overall_sentiment / sentiment_score
+        # / news_volume / confidence / summary. Derive them here so the banner
+        # reflects the real analysis instead of falling back to empty/0.
+        _dir = int(direction or 0)
+        _label = {1: "Positive", 0: "Neutral", -1: "Negative"}.get(_dir, "Neutral")
+        if magnitude < 0.15:
+            _label = "Neutral"
+        report["overall_sentiment"] = _label
+        report["sentiment_score"] = adjusted_score
+        report["news_volume"] = str(len(unique_articles))
+        report["confidence"] = int(round(magnitude * 10))
+        if not report.get("summary"):
+            report["summary"] = report.get("analytical_reasoning", "")
+
         self._log(
             f"Sentiment analysis complete. Category: {category} (x{weight}). "
             f"Direction: {direction}, Mag: {magnitude}. Adjusted Score: {adjusted_score}"

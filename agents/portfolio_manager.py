@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import Any, Dict, Optional
 
 from agents.base_agent import BaseAgent
@@ -68,7 +69,10 @@ class PortfolioManagerAgent(BaseAgent):
             "bull_thesis": debate_result.get("bull_thesis", ""),
             "bear_thesis": debate_result.get("bear_thesis", ""),
             "agreements": debate_result.get("agreements", []),
-            "disagreements": debate_result.get("disagreements", [])
+            "disagreements": debate_result.get("disagreements", []),
+            # Entropy-Modulated Confidence Score (0-10): low value == the Bull
+            # and Bear disagree sharply, so the final conviction must be modest.
+            "emcs_score": debate_result.get("emcs_score"),
         }, separators=(",", ":"))
         
         # Position-aware context construction
@@ -99,7 +103,33 @@ class PortfolioManagerAgent(BaseAgent):
         )
         
         report = self.query_json(prompt)
-        
+
+        # ── Step 2b: Calibrate conviction against disagreement & failures ──
+        # The LLM tends to over-anchor on a headline call; enforce a ceiling
+        # deterministically. EMCS caps conviction when the debate was divided,
+        # and each failed/timed-out analyst module (confidence == 0) shaves a
+        # further point so a half-blind verdict can't claim high conviction.
+        try:
+            emcs = debate_result.get("emcs_score")
+            failed_modules = sum(
+                1 for r in analyst_reports.values()
+                if isinstance(r, dict) and (r.get("confidence") == 0 or r.get("error"))
+            )
+            raw_conf = float(report.get("confidence", 0) or 0)
+            ceiling = raw_conf
+            if emcs is not None:
+                ceiling = min(ceiling, math.ceil(float(emcs)))
+            ceiling = max(1.0, ceiling - failed_modules)
+            capped = int(min(raw_conf, ceiling))
+            if capped != int(raw_conf):
+                self._log(
+                    f"Conviction capped {int(raw_conf)} -> {capped} "
+                    f"(EMCS={emcs}, failed_modules={failed_modules})."
+                )
+            report["confidence"] = capped
+        except Exception as exc:
+            self._log(f"Conviction calibration skipped: {exc}")
+
         # Attach standard disclaimer and symbol reference
         report["symbol"] = symbol.upper()
         report["disclaimer"] = DISCLAIMER

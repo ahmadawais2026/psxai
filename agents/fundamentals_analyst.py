@@ -17,6 +17,26 @@ from data.dcf_engine import DCFEngine
 import json
 
 
+def _fmt_pct_frac(v: Any) -> str:
+    """Format a ratio stored as a fraction (0.15) into a percent string (15.00%)."""
+    if v is None:
+        return "N/A"
+    try:
+        return f"{float(v) * 100:.2f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _fmt_multiple(v: Any) -> str:
+    """Format a plain ratio (2.74) into a multiple string (2.74x)."""
+    if v is None:
+        return "N/A"
+    try:
+        return f"{float(v):.2f}x"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 class FundamentalsAnalystAgent(BaseAgent):
     """Interprets company financial statements and key valuation metrics for a PSX stock."""
 
@@ -58,10 +78,14 @@ class FundamentalsAnalystAgent(BaseAgent):
             financials = {}
 
         # ── Step 3: Fetch current quote ───────────────────────────
-        try:
-            quote = get_quote(symbol) or {}
-        except Exception:
-            quote = {}
+        # Prefer the orchestrator's shared snapshot so the fundamental and
+        # technical sections quote ONE price; only fetch live if standalone.
+        quote = (context or {}).get("quote") or {}
+        if not quote:
+            try:
+                quote = get_quote(symbol) or {}
+            except Exception:
+                quote = {}
 
         # ── Step 4: Compose data blob ─────────────────────────────
         data_blob = self._build_data_blob(symbol, quote, fundamentals, financials, context or {})
@@ -88,6 +112,23 @@ class FundamentalsAnalystAgent(BaseAgent):
         context: Dict[str, Any],
     ) -> str:
         """Format fundamental data into a readable text block."""
+        # Explicit solvency hint so the narrative does not conflate illiquidity
+        # (low cash) with balance-sheet insolvency (negative equity).
+        try:
+            _ta = float(financials.get("total_assets") or 0)
+            _tl = float(financials.get("total_liabilities") or 0)
+            if _ta and _tl:
+                _eq = _ta - _tl
+                _state = ("NEGATIVE EQUITY — balance-sheet insolvent"
+                          if _eq < 0 else
+                          "positive equity — solvent on a balance-sheet basis "
+                          "(any distress here is ILLIQUIDITY / cash-flow risk, not insolvency)")
+                _equity_str = f"{_eq:,.0f} ({_state})"
+            else:
+                _equity_str = "N/A"
+        except (TypeError, ValueError):
+            _equity_str = "N/A"
+
         lines = [
             f"SYMBOL: {symbol}",
             f"COMPANY NAME: {fundamentals.get('name', symbol)}",
@@ -98,10 +139,10 @@ class FundamentalsAnalystAgent(BaseAgent):
             "── KEY VALUATION & EFFICIENCY METRICS ──",
             f"  Trailing P/E: {fundamentals.get('pe_ratio', 'N/A')}",
             f"  Price to Book (P/B): {fundamentals.get('pb_ratio', 'N/A')}",
-            f"  Return on Equity (ROE): {fundamentals.get('roe', 'N/A')}",
+            f"  Return on Equity (ROE): {_fmt_pct_frac(fundamentals.get('roe'))}",
             f"  Earnings Per Share (EPS): {fundamentals.get('eps', 'N/A')}",
             f"  Dividend Yield: {fundamentals.get('dividend_yield', 'N/A')}",
-            f"  Debt to Equity: {fundamentals.get('debt_equity', 'N/A')}",
+            f"  Debt to Equity: {_fmt_multiple(fundamentals.get('debt_to_equity'))}",
             f"  Beta: {fundamentals.get('beta', 'N/A')}",
             "",
             "── INCOME STATEMENT HIGHLIGHTS (Firestore/AskAnalyst) ──",
@@ -113,6 +154,7 @@ class FundamentalsAnalystAgent(BaseAgent):
             "── BALANCE SHEET HIGHLIGHTS ──",
             f"  Total Assets: {financials.get('total_assets', 'N/A')}",
             f"  Total Liabilities: {financials.get('total_liabilities', 'N/A')}",
+            f"  Shareholder Equity (Assets - Liabilities): {_equity_str}",
             f"  Cash and Cash Equivalents: {financials.get('cash', 'N/A')}",
             "",
             "── CASH FLOW HIGHLIGHTS ──",

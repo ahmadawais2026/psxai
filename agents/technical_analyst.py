@@ -77,10 +77,14 @@ class TechnicalAnalystAgent(BaseAgent):
             trend_text = "Trend summary unavailable."
 
         # ── Step 4: Fetch current quote for context ───────────────
-        try:
-            quote: Dict[str, Any] = get_quote(symbol) or {}
-        except Exception:
-            quote = {}
+        # Prefer the orchestrator's shared snapshot so every section of the
+        # report quotes ONE price; only fetch live if running standalone.
+        quote: Dict[str, Any] = (context or {}).get("quote") or {}
+        if not quote:
+            try:
+                quote = get_quote(symbol) or {}
+            except Exception:
+                quote = {}
 
         # ── Step 5: Prepare data blob for the LLM ────────────────
         data_blob = self._build_data_blob(symbol, quote, indicators, trend_text, df, context or {})

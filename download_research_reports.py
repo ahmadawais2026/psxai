@@ -87,17 +87,45 @@ def _fix_pdf_url(raw_url: str) -> str:
     return raw_url
 
 
+def _clean_extracted_text(text: str) -> str:
+    """Strip chart noise that pdfplumber lifts out of embedded figures.
+
+    Broker PDFs embed charts whose rotated tick labels (e.g. "-lu J -p e S -v o N",
+    which is "Jul Sep Nov" rotated 90°) and data-point runs ("4 4 4 5 5 5 6 6 6")
+    extract as gibberish and get concatenated into the narrative. This drops those
+    lines while preserving genuine prose.
+    """
+    kept: list[str] = []
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        tokens = stripped.split()
+        if not tokens:
+            continue
+        # Mostly-digit line → chart data points / axis values.
+        compact = stripped.replace(" ", "")
+        if compact and sum(c.isdigit() for c in compact) / len(compact) > 0.6:
+            continue
+        # Fragmented/rotated axis labels → a run of mostly 1-2 char tokens.
+        short = sum(1 for t in tokens if len(t) <= 2)
+        if len(tokens) >= 4 and short / len(tokens) > 0.6:
+            continue
+        kept.append(re.sub(r"[ \t]{2,}", " ", stripped))
+    return "\n".join(kept).strip()
+
+
 def _extract_pdf_text(pdf_path: Path) -> str:
-    """Extract all text from a PDF using pdfplumber."""
+    """Extract all text from a PDF using pdfplumber, with chart-noise cleanup."""
     if not HAS_PDFPLUMBER:
         return ""
     pages = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
-                text = page.extract_text()
+                text = _clean_extracted_text(page.extract_text() or "")
                 if text:
-                    pages.append(text.strip())
+                    pages.append(text)
     except Exception as e:
         print(f"    [!] PDF extract error: {e}")
         return ""

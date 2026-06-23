@@ -176,9 +176,11 @@ def _parse_pub_date(published: str) -> datetime:
     if not published:
         return datetime.min
     s = str(published).strip()
+    # Sanitize wrapped/trailing forms ("[April 28, ]", "Dec 31, 2026 -- PSX Portal").
+    s = re.sub(r"\s*--.*$", "", s).strip("[]() \t").rstrip(", ")
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
                 "%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z",
-                "%B %d, %Y"):
+                "%B %d, %Y", "%b %d, %Y", "%d-%b-%Y", "%d %b %Y", "%d %B %Y"):
         try:
             return datetime.strptime(s, fmt).replace(tzinfo=None)
         except (ValueError, TypeError):
@@ -221,7 +223,7 @@ def fetch_psx_announcements_pdf(symbol: str, max_pdfs: int = 5) -> List[Dict[str
                 continue # Skip invalid PDFs or empty HTML error pages
                 
             # 2. Extract with Gemini 3.1 Flash-Lite
-            prompt = "Extract the following from this PSX announcement: Title, Date, Category (e.g. Board Meeting, Financial Results, Merger, Other), and a brief Summary of the material information. Format as JSON with keys: title, date, category, summary."
+            prompt = "Extract the following from this PSX announcement: Title, Date, Category (e.g. Board Meeting, Financial Results, Merger, Other), and a brief Summary of the material information. The date MUST be a complete calendar date in strict YYYY-MM-DD format (e.g. 2026-04-28); if the year or day is missing or illegible, leave date as an empty string. Do NOT include brackets, source names, or any trailing text in the date field. Format as JSON with keys: title, date, category, summary."
             
             try:
                 response = client.models.generate_content(

@@ -79,7 +79,10 @@ class Orchestrator:
         def node_risk(state: FinancialConsensusState):
             logger.info(f"LangGraph: Running Risk Analyst for {state['symbol']}...")
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-            NODE_TIMEOUT = 60  # seconds — safety net above the per-fetch 8s timeouts
+            # Risk fetches now run in parallel (~10s); the remaining budget covers
+            # the LLM call + its retry/backoff. 60s was too tight and routinely
+            # tripped, blanking the whole risk section.
+            NODE_TIMEOUT = 120  # seconds
 
             def _run():
                 return self.risk_analyst.analyze(
@@ -303,6 +306,9 @@ class Orchestrator:
         agent_context = {
             "sector": sector,
             "company_name": company_name,
+            # Single price snapshot shared by every agent so the report does not
+            # show two different "current prices" (fundamental vs technical).
+            "quote": quote,
             "market_context": get_market_context(sector=sector),
             "financials_text": get_financials_text(symbol),
             "research_reports": get_research_reports(symbol, sector=sector, max_reports=5),

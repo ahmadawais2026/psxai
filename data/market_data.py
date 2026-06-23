@@ -750,6 +750,25 @@ def get_history(
 # ── Fundamentals ─────────────────────────────────────────────────────
 
 
+def _roe_to_fraction(roe: Any) -> Any:
+    """Normalize an ROE value to a *fraction* (0.15 == 15%).
+
+    Sources are inconsistent: AskAnalyst /api/ratios and the financial
+    statements sometimes report ROE as a percent (e.g. 15.3 or -2.63) and
+    sometimes as a fraction (0.153). Downstream formatting (`_pct` in the PDF
+    generator, and the analyst data-blob) expects a fraction. A genuine ROE
+    fraction is essentially always within [-1.5, 1.5]; anything larger in
+    magnitude is a percent and is scaled down.
+    """
+    if roe is None:
+        return None
+    try:
+        v = float(roe)
+    except (TypeError, ValueError):
+        return None
+    return v / 100.0 if abs(v) > 1.5 else v
+
+
 def get_fundamentals(symbol: str) -> Dict[str, Any]:
     """
     Fetch fundamental metrics for a PSX stock.
@@ -839,13 +858,17 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 if price and shares_outstanding and shares_outstanding > 0:
                     market_cap = price * shares_outstanding * 1_000_000.0
 
+                # ROE as a FRACTION (0.15 == 15%); _pct() and the analyst
+                # data-blob format it to a percent at the edge.
                 roe = highlights.get("roe")
                 if roe is None and equity > 0:
-                    roe = (highlights.get("net_income", 0.0) / equity) * 100
-                
+                    roe = highlights.get("net_income", 0.0) / equity
+                roe = _roe_to_fraction(roe)
+
+                # Debt/Equity as a plain MULTIPLE (2.74 == 2.74x), not a percent.
                 debt_equity = None
                 if equity > 0:
-                    debt_equity = (total_liabilities / equity) * 100
+                    debt_equity = total_liabilities / equity
                 
                 fundamentals = {
                     "symbol":               local,
@@ -914,7 +937,7 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 consensus = get_analyst_consensus(local)
 
                 eps = ratios.get("eps") or (float(info.get("eps") or 0.0) or None)
-                roe = ratios.get("roe") or None
+                roe = _roe_to_fraction(ratios.get("roe") or None)
                 dps = ratios.get("dps")
                 ev_ebitda = ratios.get("ev_ebitda")
                 free_float_pct = equity_prof.get("free_float_pct")

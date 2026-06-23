@@ -221,6 +221,13 @@ class ResearchTeam:
             "agreements": agreements,
             "disagreements": disagreements,
             "unique_findings": unique_findings,
-            "debate_log": debate_log
+            "debate_log": debate_log,
+            # Structured EMCS so the Portfolio Manager can cap conviction on
+            # high disagreement, instead of having to parse it out of the
+            # disagreements string.
+            "emcs_score": round(emcs_score, 2),
+            "entropy": round(entropy, 3),
+            "bull_conviction": bull_conv,
+            "bear_conviction": bear_conv,
         }
 

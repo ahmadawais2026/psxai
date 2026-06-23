@@ -7,6 +7,7 @@ Uses ReportLab Platypus.
 from __future__ import annotations
 
 import io
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,12 +46,32 @@ W, H = A4  # 595 x 842 pts
 
 # ── Text safety ───────────────────────────────────────────────────────────────
 
+# Smart punctuation / symbols → ASCII or WinAnsi-safe equivalents so the PDF's
+# Helvetica font renders them instead of dropping them to "?".
+_UNICODE_MAP = {
+    "—": "-", "–": "-", "‒": "-", "−": "-",   # dashes
+    "‘": "'", "’": "'", "‚": "'", "‛": "'",   # single quotes
+    "“": '"', "”": '"', "„": '"',                  # double quotes
+    "…": "...", "•": "*", "·": "*", "⁃": "-",  # ellipsis/bullets
+    "→": "->", "←": "<-", "↔": "<->",              # arrows
+    " ": " ", "​": "", "﻿": "",                    # spaces/BOM
+}
+
+
+def _normalize_text(s: str) -> str:
+    """Map smart punctuation to ASCII and drop characters outside Latin-1
+    (e.g. emoji) so they vanish cleanly instead of becoming "?" glyphs."""
+    for k, v in _UNICODE_MAP.items():
+        if k in s:
+            s = s.replace(k, v)
+    return s.encode("latin-1", errors="ignore").decode("latin-1")
+
+
 def _safe(text: Any, maxlen: int = 0) -> str:
     if text is None:
         return ""
-    s = str(text)
+    s = _normalize_text(str(text))
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    s = s.encode("latin-1", errors="replace").decode("latin-1")
     return s[:maxlen] if maxlen else s
 
 
@@ -91,6 +112,25 @@ def _pct(val: Any) -> str:
         return f"{v:.1f}%"
     except (TypeError, ValueError):
         return "-"
+
+
+def _clean_date(raw: Any) -> str:
+    """Sanitize an announcement date for display.
+
+    Source dates arrive wrapped/trailing ("[April 28, ]", "[February 2]",
+    "December 31, 20 -- PSX Portal"). The old blind ``[:10]`` slice mangled valid
+    dates ("December 3"). Strip brackets and trailing source, keep the ISO date
+    part when present, otherwise a sane prefix.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    s = re.sub(r"\s*--.*$", "", s)        # drop trailing " -- Source"
+    s = s.strip("[]() \t").rstrip(", ")
+    m = re.match(r"\d{4}-\d{2}-\d{2}", s)  # already ISO → keep date part
+    if m:
+        return m.group(0)
+    return s[:20]
 
 
 def _mktcap_str(v: Any) -> str:
@@ -239,11 +279,21 @@ _IS_KW = [
 
 _BS_KW = [
     "total assets",
+    # List "non-current assets" before "current assets": the matcher takes the
+    # first substring hit, and "current assets" is a substring of "non-current
+    # assets", so the broad term must claim its own row first.
+    "non-current assets",
+    "current assets",
+    # Working-capital line items — previously omitted, which left ~half the
+    # asset base unexplained (Total Assets didn't reconcile to the listed rows).
+    "stock in trade", "inventory", "stores and spares",
+    "trade debts", "trade receivable", "accounts receivable", "receivable",
+    "short-term investment", "short term investment",
+    "cash and bank", "cash & bank", "cash",
     "total equity", "total shareholders",
     "total liabilities",
-    "cash and bank", "cash & bank", "cash",
+    "non-current liabilities", "current liabilities",
     "total debt", "short-term borrowing", "long-term borrowing",
-    "current assets", "non-current assets",
 ]
 
 _CF_KW = [
@@ -461,7 +511,18 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     current = rec.get("current_price") or quote.get("price") or 0
     pt_low  = rec.get("price_target_low")  or 0
     pt_high = rec.get("price_target_high") or 0
-    upside  = rec.get("upside_pct") or 0
+    upside  = rec.get("upside_pct")
+    # Fallback: derive upside from the target midpoint vs current price when the
+    # recommendation didn't quantify it, so the field isn't left blank while the
+    # prose quotes a downside figure.
+    if not upside and current and (pt_low or pt_high):
+        try:
+            target_mid = ((float(pt_low) + float(pt_high)) / 2.0
+                          if (pt_low and pt_high) else float(pt_high or pt_low))
+            upside = (target_mid - float(current)) / float(current) * 100.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            upside = 0
+    upside = upside or 0
     horizon = (rec.get("time_horizon") or "-").replace("_", " ").title()
     conf    = rec.get("confidence") or 0
 
@@ -586,7 +647,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         ("Dividend Yield",   _pct(div_y) if div_y else "-"),
         ("Revenue Growth",   _pct(funda.get("revenue_growth"))),
         ("Earnings Growth",  _pct(funda.get("earnings_growth"))),
-        ("Debt/Equity",      f"{float(funda.get('debt_to_equity', 0)):.1f}x" if funda.get("debt_to_equity") else "-"),
+        ("Debt/Equity",      f"{float(funda.get('debt_to_equity', 0)):.2f}x" if funda.get("debt_to_equity") else "-"),
         ("Current Ratio",    f"{float(funda.get('current_ratio', 0)):.2f}x"  if funda.get("current_ratio")  else "-"),
         ("Beta",             f"{float(beta):.2f}" if beta else "-"),
         ("Free Cash Flow",   _mktcap_str(funda.get("free_cash_flow"))),
@@ -793,7 +854,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     if news:
         for art in news[:10]:
             title_  = art.get("title")       or art.get("Title")    or art.get("headline") or "-"
-            date_   = str(art.get("date")    or art.get("Date")     or art.get("published") or "")[:10]
+            date_   = _clean_date(art.get("date") or art.get("Date") or art.get("published"))
             source  = art.get("source")      or art.get("Source")   or art.get("publisher") or ""
             body_   = art.get("content") or art.get("description") or art.get("body") or art.get("snippet") or ""
 
