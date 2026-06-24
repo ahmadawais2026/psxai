@@ -155,14 +155,14 @@ class BaseAgent:
 
     def _invoke_gemini(self, model: str, gen_cfg: Dict[str, Any], full_prompt: str) -> str:
         self._log(f"Querying Gemini model {model} ({len(full_prompt)} chars) …")
+        use_grounding = getattr(self, "use_grounding", False)
 
         last_error: Optional[Exception] = None
         for attempt in range(1, 4):
             try:
-                # Build config from the resolved tier gen_cfg. The except branch
-                # below reconstructs the SAME tier values minus thinking_config,
-                # so a thinking_budget rejection never silently reverts to defaults.
-                try:
+                # Google Search grounding and thinking_config are mutually exclusive
+                # on the Vertex AI API. When grounding is active, omit thinking_config.
+                if use_grounding:
                     response = self.client.models.generate_content(
                         model=model,
                         contents=full_prompt,
@@ -170,14 +170,11 @@ class BaseAgent:
                             system_instruction=self.persona,
                             temperature=gen_cfg["temperature"],
                             max_output_tokens=gen_cfg["max_output_tokens"],
-                            thinking_config=types.ThinkingConfig(
-                                thinking_budget=gen_cfg["thinking_budget"]
-                            ),
+                            tools=[types.Tool(google_search=types.GoogleSearch())],
                         ),
                     )
-                except Exception as config_exc:
-                    if "thinking" in str(config_exc).lower() or "validation" in str(config_exc).lower():
-                        self._log(f"Model {model} rejected thinking_config. Retrying without it...")
+                else:
+                    try:
                         response = self.client.models.generate_content(
                             model=model,
                             contents=full_prompt,
@@ -185,10 +182,25 @@ class BaseAgent:
                                 system_instruction=self.persona,
                                 temperature=gen_cfg["temperature"],
                                 max_output_tokens=gen_cfg["max_output_tokens"],
+                                thinking_config=types.ThinkingConfig(
+                                    thinking_budget=gen_cfg["thinking_budget"]
+                                ),
                             ),
                         )
-                    else:
-                        raise config_exc
+                    except Exception as config_exc:
+                        if "thinking" in str(config_exc).lower() or "validation" in str(config_exc).lower():
+                            self._log(f"Model {model} rejected thinking_config. Retrying without it...")
+                            response = self.client.models.generate_content(
+                                model=model,
+                                contents=full_prompt,
+                                config=types.GenerateContentConfig(
+                                    system_instruction=self.persona,
+                                    temperature=gen_cfg["temperature"],
+                                    max_output_tokens=gen_cfg["max_output_tokens"],
+                                ),
+                            )
+                        else:
+                            raise config_exc
 
                 if response.text:
                     text = response.text.strip()

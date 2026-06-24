@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let currentTheme = 'dark';
     let currentReport = null;   // stores the full analysis report for PDF download
     let isAnalyzing = false;    // tracks if an analysis is currently streaming
+    let analysisAbortController = null;
 
     // ── DOM ELEMENTS ─────────────────────────────────────────────────
     // Theme Toggle
@@ -183,6 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function initApp() {
         initTheme();
         setupEventListeners();
+        initMicroInteractions();
         await initFirebase();
         // Guard: checkAuthOnLoad is not defined in this build, and an
         // undefined-reference here aborts initApp() — which silently kills every
@@ -201,6 +203,46 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return msg;
             }
         });
+    }
+
+    // ── MICRO-INTERACTIONS ───────────────────────────────────────────
+    function initMicroInteractions() {
+        // 1. Magnetic Buttons via event delegation
+        document.addEventListener('mousemove', (e) => {
+            const target = e.target.closest('button, .recent-chip');
+            if (target) {
+                const rect = target.getBoundingClientRect();
+                const x = e.clientX - rect.left - rect.width / 2;
+                const y = e.clientY - rect.top - rect.height / 2;
+                
+                // Aggressive pull factor
+                const pullX = x * 0.4;
+                const pullY = y * 0.4;
+                
+                target.style.transform = `translate(${pullX}px, ${pullY}px) scale(1.05)`;
+                target.style.transition = 'transform 0.1s ease-out';
+                target.dataset.magnetic = 'true';
+            }
+            
+            // Revert elements that were previously magnetic but are no longer hovered
+            document.querySelectorAll('[data-magnetic="true"]').forEach(el => {
+                if (el !== target) {
+                    el.style.transform = 'translate(0px, 0px) scale(1)';
+                    el.style.transition = 'transform 0.3s ease-in-out';
+                    el.removeAttribute('data-magnetic');
+                }
+            });
+        });
+        
+        // Ensure reset on mouseout from the document
+        document.addEventListener('mouseleave', () => {
+            document.querySelectorAll('[data-magnetic="true"]').forEach(el => {
+                el.style.transform = 'translate(0px, 0px) scale(1)';
+                el.style.transition = 'transform 0.3s ease-in-out';
+                el.removeAttribute('data-magnetic');
+            });
+        });
+
     }
 
     // ── THEME FUNCTIONS ──────────────────────────────────────────────
@@ -895,7 +937,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ── RUN ANALYSIS PIPELINE ────────────────────────────────────────
     async function triggerAnalysis(symbol) {
-        if (isAnalyzing) return; // Prevent concurrent requests
+        if (isAnalyzing) {
+            const proceed = confirm("An analysis is currently running. Starting a new analysis will cancel the current one. Do you want to proceed?");
+            if (!proceed) return;
+
+            if (analysisAbortController) {
+                analysisAbortController.abort();
+            }
+            isAnalyzing = false;
+        }
         
         symbol = symbol.trim().toUpperCase();
         if (!symbol) return;
@@ -907,6 +957,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Prep UI for loading
         showLoadingState();
         isAnalyzing = true;
+
+        analysisAbortController = new AbortController();
+        const myAbortController = analysisAbortController;
+        const signal = analysisAbortController.signal;
 
         try {
             // Reset steps to pending
@@ -936,7 +990,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 body: JSON.stringify({
                     symbol: symbol,
                     include_portfolio: true
-                })
+                }),
+                signal: signal
             });
 
             if (!res.ok) {
@@ -973,10 +1028,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 } else if (event.event === 'node_finish') {
                                     const d = event.data || {};
                                     // Progressive reveal: fill each agent's card the moment it finishes.
-                                    if (d.technical_report)   { enterProgressiveMode(); renderTechnicalCard(d.technical_report);     markStepDone(stepTechnical, 'technical'); }
-                                    if (d.fundamental_report) { enterProgressiveMode(); renderFundamentalCard(d.fundamental_report); markStepDone(stepFundamental, 'fundamental'); }
-                                    if (d.sentiment_report)   { enterProgressiveMode(); renderSentimentCard(d.sentiment_report);     markStepDone(stepSentiment, 'sentiment'); }
-                                    if (d.risk_report)        { enterProgressiveMode(); renderRiskCard(d.risk_report);               markStepDone(stepRisk, 'risk'); }
+                                    if (d.technical_report)   { enterProgressiveMode(); revealCard('card-technical'); renderTechnicalCard(d.technical_report);     markStepDone(stepTechnical, 'technical'); }
+                                    if (d.fundamental_report) { enterProgressiveMode(); revealCard('card-fundamental'); renderFundamentalCard(d.fundamental_report); markStepDone(stepFundamental, 'fundamental'); }
+                                    if (d.sentiment_report)   { enterProgressiveMode(); revealCard('card-sentiment'); renderSentimentCard(d.sentiment_report);     markStepDone(stepSentiment, 'sentiment'); }
+                                    if (d.risk_report)        { enterProgressiveMode(); revealCard('card-risk'); renderRiskCard(d.risk_report);               markStepDone(stepRisk, 'risk'); }
                                     if (d.debate_result)      { debateSection.removeAttribute('hidden'); renderDebate(d.debate_result); setStepStatus(stepDebate, 'done'); }
                                     if (d.recommendation)     { verdictSection.removeAttribute('hidden'); renderVerdict(d.recommendation); setStepStatus(stepRecommendation, 'done'); }
 
@@ -1012,11 +1067,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
         } catch (err) {
+            if (err.name === 'AbortError') {
+                console.log('Analysis stream aborted.');
+                return;
+            }
             console.error('Analysis failed:', err);
             showErrorState(err.message || 'An unexpected error occurred. Rate limits may have been hit.');
         } finally {
-            isAnalyzing = false;
-            stopAnalysisTimer();
+            if (analysisAbortController === myAbortController) {
+                isAnalyzing = false;
+                stopAnalysisTimer();
+            }
         }
     }
 
@@ -1052,22 +1113,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         title.textContent = `AI Agents Working · ${done}/${steps.length} · ${mm}:${ss}`;
     }
 
-    // Switch from the initial skeleton grid to the live agent grid, placing a
-    // loading placeholder in every analyst card; arrived cards overwrite theirs.
+    // Progressive disclosure state handler
     function enterProgressiveMode() {
         if (progressiveMode) return;
         progressiveMode = true;
-        skeletonGrid.setAttribute('hidden', '');
-        agentsGrid.removeAttribute('hidden');
-        [['content-technical', 'badge-technical-trend'],
-         ['content-fundamental', 'badge-fundamental-verdict'],
-         ['content-sentiment', 'badge-sentiment-score'],
-         ['content-risk', 'badge-risk-level']].forEach(([cid, bid]) => {
-            const c = document.getElementById(cid);
-            if (c) c.innerHTML = '<div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line skeleton--short"></div><div class="skeleton skeleton--line skeleton--medium"></div>';
-            const b = document.getElementById(bid);
-            if (b && b.textContent.trim() === '—') b.textContent = '···';
-        });
+        // The skeleton grid is hidden in showLoadingState. Cards are revealed individually.
+    }
+
+    // Sequentially reveal a loaded agent card
+    function revealCard(id) {
+        const card = document.getElementById(id);
+        if (card && card.style.display === 'none') {
+            card.style.display = 'flex';
+            // Force a reflow so the transition animation plays
+            void card.offsetWidth;
+            card.style.opacity = '1';
+            card.style.transform = 'translateY(0)';
+        }
     }
 
     // Mark an analyst step done and pulse its card so the new insight draws the eye.
@@ -1084,8 +1146,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         analysisSection.removeAttribute('hidden');
         quoteCard.setAttribute('hidden', '');
         agentStatusBar.removeAttribute('hidden');
-        skeletonGrid.removeAttribute('hidden');
-        agentsGrid.setAttribute('hidden', '');
+        // Progressive Disclosure: completely hide skeleton grid
+        skeletonGrid.setAttribute('hidden', '');
+        agentsGrid.removeAttribute('hidden');
+        
+        // Hide all cards initially; reveal them sequentially as they load
+        ['card-technical', 'card-fundamental', 'card-sentiment', 'card-risk'].forEach(id => {
+            const card = document.getElementById(id);
+            if (card) {
+                card.style.display = 'none';
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                card.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+            }
+        });
+
         debateSection.setAttribute('hidden', '');
         verdictSection.setAttribute('hidden', '');
         errorDisplay.setAttribute('hidden', '');
@@ -1165,6 +1240,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         debateSection.removeAttribute('hidden');
         verdictSection.removeAttribute('hidden');
         if (reportDownloadBar) reportDownloadBar.removeAttribute('hidden');
+
+        // Reveal all cards (in case they were hidden by showLoadingState)
+        ['card-technical', 'card-fundamental', 'card-sentiment', 'card-risk'].forEach(id => {
+            revealCard(id);
+        });
 
         // 1. Render Quote
         renderQuote(report.quote, report.company_name, report.sector);

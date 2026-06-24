@@ -539,6 +539,211 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
     ))
     story.append(Spacer(1, 0.2 * cm))
 
+    story.append(PageBreak())
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 2 — BUSINESS INTELLIGENCE
+    # ══════════════════════════════════════════════════════════════════════════
+    biz = report.get("business_report", {}) or {}
+    biz_overview = biz.get("company_overview", {}) or {}
+    biz_segments = biz.get("revenue_segments", []) or []
+    biz_products = biz.get("products_and_services", []) or []
+    biz_opps = biz.get("upcoming_opportunities", []) or []
+    biz_headwinds = biz.get("upcoming_headwinds", []) or []
+    biz_initiatives = biz.get("strategic_initiatives", []) or []
+    biz_industry = biz.get("industry_dynamics", {}) or {}
+    biz_confidence = biz.get("confidence", 0)
+    biz_data_note = biz.get("data_quality_note", "")
+
+    # C_AMBER / orange for headwinds label reuse
+    C_BIZGREEN = colors.HexColor("#065f46")  # Deep green for opportunity headers
+    C_BIZRED   = colors.HexColor("#7f1d1d")  # Deep red for headwind headers
+    C_BIZGREEN_BG = colors.HexColor("#d1fae5")  # Light green tint for opportunity rows
+    C_BIZRED_BG   = colors.HexColor("#fee2e2")  # Light red tint for headwind rows
+
+    story.append(Paragraph("BUSINESS INTELLIGENCE", st["section"]))
+    story.append(_hr(colors.HexColor("#7c3aed"), 1.0))  # Purple accent line
+
+    # ── Company Overview banner ───────────────────────────────────────────────
+    if biz_overview:
+        what = biz_overview.get("what_they_do", "")
+        btype = (biz_overview.get("business_type") or "").replace("_", " ").title()
+        geo = biz_overview.get("primary_geography", "")
+        comp = (biz_overview.get("competitive_position") or "").title()
+        op_metric = biz_overview.get("key_operational_metric", "")
+
+        story.append(_kv_banner(
+            ["Business Type", "Geography", "Market Position", "Key Operating Metric", "BI Confidence"],
+            [btype or "-", geo or "-", comp or "-", op_metric or "-", f"{biz_confidence}/10"],
+            col_w=dw / 5,
+            hdr_bg=colors.HexColor("#7c3aed"),
+        ))
+        story.append(Spacer(1, 0.2 * cm))
+
+        if what:
+            story.append(Paragraph("Company Snapshot", st["sub"]))
+            story.append(Paragraph(_safe(what), st["body"]))
+
+    # ── Revenue Segments table ────────────────────────────────────────────────
+    if biz_segments:
+        story.append(Spacer(1, 0.15 * cm))
+        story.append(Paragraph("Revenue Segments", st["sub"]))
+
+        seg_hdr = ["Segment", "Revenue Share", "Margin Profile", "Trend"]
+        seg_hdr_ps = [Paragraph(_safe(h), ParagraphStyle(
+            "sh", fontSize=7.5, fontName="Helvetica-Bold",
+            textColor=C_WHITE, alignment=TA_CENTER)) for h in seg_hdr]
+        seg_rows = [seg_hdr_ps]
+        for i, seg in enumerate(biz_segments[:6]):
+            name = seg.get("segment", "")
+            share = seg.get("estimated_revenue_share", "-")
+            margin = (seg.get("margin_profile") or "-").title()
+            trend = (seg.get("trend") or "-").title()
+            trend_color = C_GREEN if "grow" in trend.lower() else (C_RED if "declin" in trend.lower() else C_DARK)
+            row = [
+                Paragraph(_safe(name), ParagraphStyle("sl", fontSize=7.5, fontName="Helvetica-Bold", textColor=C_DARK)),
+                Paragraph(_safe(share), ParagraphStyle("sv", fontSize=7.5, fontName="Helvetica", textColor=C_DARK, alignment=TA_CENTER)),
+                Paragraph(_safe(margin), ParagraphStyle("sm", fontSize=7.5, fontName="Helvetica", textColor=C_DARK, alignment=TA_CENTER)),
+                Paragraph(_safe(trend), ParagraphStyle("st", fontSize=7.5, fontName="Helvetica-Bold", textColor=trend_color, alignment=TA_CENTER)),
+            ]
+            seg_rows.append(row)
+        seg_w = [dw * 0.40, dw * 0.22, dw * 0.20, dw * 0.18]
+        seg_table = Table(seg_rows, colWidths=seg_w)
+        seg_ts = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#7c3aed")),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("GRID", (0, 0), (-1, -1), 0.3, C_BORDER),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]
+        for i in range(1, len(seg_rows)):
+            seg_ts.append(("BACKGROUND", (0, i), (-1, i), C_WHITE if i % 2 == 1 else C_SURFACE))
+        seg_table.setStyle(TableStyle(seg_ts))
+        story.append(seg_table)
+
+    # ── Products & Services ───────────────────────────────────────────────────
+    if biz_products:
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph("Products &amp; Services", st["sub"]))
+        for prod in biz_products[:4]:
+            pname = prod.get("name", "")
+            pdesc = prod.get("description", "")
+            near = prod.get("near_term_outlook", "")
+            long_ = prod.get("long_term_outlook", "")
+            if pname:
+                story.append(Paragraph(_safe(f"\u25b8  {pname}"), ParagraphStyle(
+                    "pn", fontSize=8.5, fontName="Helvetica-Bold", textColor=C_DARK, spaceBefore=3)))
+            if pdesc:
+                story.append(Paragraph(_safe(pdesc), ParagraphStyle(
+                    "pd", fontSize=8, leading=11, fontName="Helvetica", textColor=C_GRAY, leftIndent=10)))
+            if near or long_:
+                outlook_rows = []
+                if near:
+                    outlook_rows.append([Paragraph("Near-term (12 mo)", ParagraphStyle(
+                        "ok", fontSize=7, fontName="Helvetica-Bold", textColor=C_GRAY)),
+                        Paragraph(_safe(near), ParagraphStyle(
+                        "ov", fontSize=7, leading=10, fontName="Helvetica", textColor=C_DARK))])
+                if long_:
+                    outlook_rows.append([Paragraph("Long-term (3-5 yr)", ParagraphStyle(
+                        "ok2", fontSize=7, fontName="Helvetica-Bold", textColor=C_GRAY)),
+                        Paragraph(_safe(long_), ParagraphStyle(
+                        "ov2", fontSize=7, leading=10, fontName="Helvetica", textColor=C_DARK))])
+                if outlook_rows:
+                    ot = Table(outlook_rows, colWidths=[dw * 0.18, dw * 0.82])
+                    ot.setStyle(TableStyle([
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("TOPPADDING", (0, 0), (-1, -1), 2),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ]))
+                    story.append(ot)
+
+    # ── Opportunities & Headwinds (two-column) ────────────────────────────────
+    if biz_opps or biz_headwinds:
+        story.append(Spacer(1, 0.2 * cm))
+
+        opp_items = []
+        for o in biz_opps[:4]:
+            oname = o.get("opportunity", "")
+            odesc = o.get("description", "")
+            otl = o.get("timeline", "")
+            opp_items.append(f"{oname}: {odesc}" + (f" [{otl}]" if otl else ""))
+
+        hw_items = []
+        for h in biz_headwinds[:4]:
+            hname = h.get("headwind", "")
+            hdesc = h.get("description", "")
+            hw_items.append(f"{hname}: {hdesc}")
+
+        oh_header = [
+            Paragraph("UPCOMING OPPORTUNITIES", ParagraphStyle(
+                "oph", fontSize=8, fontName="Helvetica-Bold", textColor=C_BIZGREEN)),
+            Paragraph("UPCOMING HEADWINDS", ParagraphStyle(
+                "hwh", fontSize=8, fontName="Helvetica-Bold", textColor=C_BIZRED)),
+        ]
+        oh_rows = [oh_header]
+        for i in range(max(len(opp_items), len(hw_items))):
+            lo = Paragraph(_safe(f"+ {opp_items[i]}"), ParagraphStyle(
+                "oi", fontSize=7.5, leading=11, fontName="Helvetica", textColor=C_DARK)) if i < len(opp_items) else Paragraph("", st["body_sm"])
+            rh = Paragraph(_safe(f"- {hw_items[i]}"), ParagraphStyle(
+                "hi", fontSize=7.5, leading=11, fontName="Helvetica", textColor=C_DARK)) if i < len(hw_items) else Paragraph("", st["body_sm"])
+            oh_rows.append([lo, rh])
+
+        oh_table = Table(oh_rows, colWidths=[dw / 2, dw / 2])
+        oh_ts = [
+            ("BACKGROUND", (0, 0), (0, 0), C_BIZGREEN_BG),
+            ("BACKGROUND", (1, 0), (1, 0), C_BIZRED_BG),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("LINEAFTER", (0, 0), (0, -1), 0.4, C_BORDER),
+            ("GRID", (0, 0), (-1, -1), 0.3, C_BORDER),
+        ]
+        for i in range(1, len(oh_rows)):
+            oh_ts.append(("BACKGROUND", (0, i), (0, i), C_BIZGREEN_BG if i % 2 == 1 else C_WHITE))
+            oh_ts.append(("BACKGROUND", (1, i), (1, i), C_BIZRED_BG if i % 2 == 1 else C_WHITE))
+        oh_table.setStyle(TableStyle(oh_ts))
+        story.append(oh_table)
+
+    # ── Industry Dynamics ─────────────────────────────────────────────────────
+    if biz_industry.get("near_term") or biz_industry.get("long_term"):
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph("Industry Dynamics", st["sub"]))
+        if biz_industry.get("near_term"):
+            story.append(Paragraph(_safe(f"Near-term: {biz_industry['near_term']}"), st["body_sm"]))
+        if biz_industry.get("long_term"):
+            story.append(Paragraph(_safe(f"Long-term: {biz_industry['long_term']}"), st["body_sm"]))
+
+    # ── Strategic Initiatives ─────────────────────────────────────────────────
+    if biz_initiatives:
+        story.append(Spacer(1, 0.1 * cm))
+        story.append(Paragraph("Strategic Initiatives", st["sub"]))
+        for init in biz_initiatives[:5]:
+            story.append(Paragraph(_safe(f"\u2022 {init}"), st["bullet"]))
+
+    # ── Data note ─────────────────────────────────────────────────────────────
+    if biz_data_note:
+        story.append(Spacer(1, 0.1 * cm))
+        story.append(Paragraph(_safe(f"Data note: {biz_data_note}"), st["italic"]))
+
+    if not biz_overview and not biz_segments and not biz_products:
+        story.append(Paragraph(
+            "Business intelligence report not available for this analysis run.",
+            st["italic"],
+        ))
+
+    story.append(PageBreak())
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 3 — FINANCIAL ANALYSIS  (was page 2)
+    # ══════════════════════════════════════════════════════════════════════════
+    story.append(Paragraph("FINANCIAL ANALYSIS", st["section"]))
+    story.append(_hr(C_GREEN, 1.0))
+
     pe    = quote.get("pe_ratio")   or funda.get("pe_ratio")
     pb    = funda.get("pb_ratio")
     beta  = quote.get("beta")       or funda.get("beta")

@@ -19,6 +19,7 @@ from agents.technical_analyst import TechnicalAnalystAgent
 from agents.fundamentals_analyst import FundamentalsAnalystAgent
 from agents.sentiment_analyst import SentimentAnalystAgent
 from agents.risk_analyst import RiskAnalystAgent
+from agents.business_analyst import BusinessAnalystAgent
 from agents.research_team import ResearchTeam
 from agents.portfolio_manager import PortfolioManagerAgent
 from agents.prompts import DISCLAIMER
@@ -40,6 +41,7 @@ class FinancialConsensusState(TypedDict):
     fundamental_report: Optional[Dict[str, Any]]
     sentiment_report: Optional[Dict[str, Any]]
     risk_report: Optional[Dict[str, Any]]
+    business_report: Optional[Dict[str, Any]]
     debate_result: Optional[Dict[str, Any]]
     recommendation: Optional[Dict[str, Any]]
 
@@ -53,6 +55,7 @@ class Orchestrator:
         self.fundamentals_analyst = FundamentalsAnalystAgent()
         self.sentiment_analyst = SentimentAnalystAgent()
         self.risk_analyst = RiskAnalystAgent()
+        self.business_analyst = BusinessAnalystAgent()
         self.research_team = ResearchTeam()
         self.portfolio_manager = PortfolioManagerAgent()
         self.graph = self._build_graph()
@@ -121,13 +124,25 @@ class Orchestrator:
             return {"risk_report": rep}
 
 
+        def node_business(state: FinancialConsensusState):
+            logger.info(f"LangGraph: Running Business Analyst for {state['symbol']}...")
+            ctx = state["agent_context"]
+            rep = self.business_analyst.analyze(
+                symbol=state["symbol"],
+                company_name=ctx.get("company_name", ""),
+                sector=ctx.get("sector", ""),
+                context=ctx,
+            )
+            return {"business_report": rep}
+
         def node_debate(state: FinancialConsensusState):
             logger.info(f"LangGraph: Running Research Team Debate for {state['symbol']}...")
             reports = {
                 "technical": state["technical_report"],
                 "fundamental": state["fundamental_report"],
                 "sentiment": state["sentiment_report"],
-                "risk": state["risk_report"]
+                "risk": state["risk_report"],
+                "business": state.get("business_report"),
             }
             res = self.research_team.debate(reports, rounds=2)
             return {"debate_result": res}
@@ -138,7 +153,8 @@ class Orchestrator:
                 "technical": state["technical_report"],
                 "fundamental": state["fundamental_report"],
                 "sentiment": state["sentiment_report"],
-                "risk": state["risk_report"]
+                "risk": state["risk_report"],
+                "business": state.get("business_report"),
             }
             rec = self.portfolio_manager.generate_recommendation(
                 symbol=state["symbol"],
@@ -153,17 +169,19 @@ class Orchestrator:
         workflow.add_node("fundamental", node_fundamental)
         workflow.add_node("sentiment", node_sentiment)
         workflow.add_node("risk", node_risk)
+        workflow.add_node("business", node_business)
         workflow.add_node("debate", node_debate)
         workflow.add_node("portfolio", node_portfolio)
 
-        # Parallel fan-out
+        # Parallel fan-out (5 specialist agents run simultaneously)
         workflow.add_edge(START, "technical")
         workflow.add_edge(START, "fundamental")
         workflow.add_edge(START, "sentiment")
         workflow.add_edge(START, "risk")
+        workflow.add_edge(START, "business")
 
-        # Fan-in to debate
-        workflow.add_edge(["technical", "fundamental", "sentiment", "risk"], "debate")
+        # Fan-in: all 5 agents must complete before debate
+        workflow.add_edge(["technical", "fundamental", "sentiment", "risk", "business"], "debate")
 
         # Debate to Portfolio
         workflow.add_edge("debate", "portfolio")
@@ -343,6 +361,7 @@ class Orchestrator:
             "fundamental_report": None,
             "sentiment_report": None,
             "risk_report": None,
+            "business_report": None,
             "debate_result": None,
             "recommendation": None
         }
@@ -391,6 +410,7 @@ class Orchestrator:
                     "fundamental_report": current_state.get("fundamental_report"),
                     "sentiment_report": current_state.get("sentiment_report"),
                     "risk_report": current_state.get("risk_report"),
+                    "business_report": current_state.get("business_report"),
                     "debate": {
                         "bull_thesis": debate_res.get("bull_thesis", ""),
                         "bull_arguments": debate_res.get("bull_arguments", []),
@@ -430,6 +450,7 @@ class Orchestrator:
             "fundamental_report": current_state.get("fundamental_report"),
             "sentiment_report": current_state.get("sentiment_report"),
             "risk_report": current_state.get("risk_report"),
+            "business_report": current_state.get("business_report"),
             "debate": {
                 "bull_thesis": debate_res.get("bull_thesis", ""),
                 "bull_arguments": debate_res.get("bull_arguments", []),

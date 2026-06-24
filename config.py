@@ -90,6 +90,7 @@ ROLE_TIER = {
     "bull": "reasoning",
     "bear": "reasoning",
     "portfolio_manager": "reasoning",
+    "business": "reasoning",   # Business Analyst: qualitative synthesis, uses Google Search grounding
     "technical": "fast",
     "sentiment": "fast",
     "debate_synthesizer": "fast",

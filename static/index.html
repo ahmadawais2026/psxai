@@ -35,8 +35,8 @@
                     <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
                         <defs>
                             <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#10b981"/>
-                                <stop offset="100%" stop-color="#06b6d4"/>
+                                <stop offset="0%" stop-color="#d4c4b7"/>
+                                <stop offset="100%" stop-color="#e8dcd0"/>
                             </linearGradient>
                         </defs>
                         <rect x="2" y="2" width="32" height="32" rx="8" stroke="url(#logoGrad)" stroke-width="2.5" fill="none"/>
@@ -80,7 +80,7 @@
                         id="search-input"
                         type="text"
                         class="search-input"
-                        placeholder="Search PSX stocks... (e.g., OGDC, HBL, LUCK)"
+                        placeholder="Enter a ticker (e.g., OGDC, HBL)..."
                         autocomplete="off"
                         spellcheck="false"
                         aria-label="Search PSX stocks"
@@ -121,27 +121,27 @@
                 <div id="agent-steps" class="agent-steps">
                     <div id="step-technical" class="agent-step" data-status="pending">
                         <span class="step-dot"></span>
-                        <span class="step-label">Analyzing technicals...</span>
+                        <span class="step-label">Running deep technical scan...</span>
                     </div>
                     <div id="step-fundamental" class="agent-step" data-status="pending">
                         <span class="step-dot"></span>
-                        <span class="step-label">Reviewing fundamentals...</span>
+                        <span class="step-label">Crunching financial models...</span>
                     </div>
                     <div id="step-sentiment" class="agent-step" data-status="pending">
                         <span class="step-dot"></span>
-                        <span class="step-label">Gauging sentiment...</span>
+                        <span class="step-label">Extracting market sentiment...</span>
                     </div>
                     <div id="step-risk" class="agent-step" data-status="pending">
                         <span class="step-dot"></span>
-                        <span class="step-label">Assessing risk...</span>
+                        <span class="step-label">Quantifying downside risk...</span>
                     </div>
                     <div id="step-debate" class="agent-step" data-status="pending">
                         <span class="step-dot"></span>
-                        <span class="step-label">Debating bull vs bear...</span>
+                        <span class="step-label">Synthesizing bull/bear thesis...</span>
                     </div>
                     <div id="step-recommendation" class="agent-step" data-status="pending">
                         <span class="step-dot"></span>
-                        <span class="step-label">Generating recommendation...</span>
+                        <span class="step-label">Formulating final verdict...</span>
                     </div>
                 </div>
             </div>
@@ -413,11 +413,11 @@
                 <div class="error-icon">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                 </div>
-                <h3 id="error-title" class="error-title">Analysis Failed</h3>
+                <h3 id="error-title" class="error-title">Signal Interrupted</h3>
                 <p id="error-message" class="error-message"></p>
                 <button id="btn-retry" class="btn btn-primary">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                    Retry Analysis
+                    Restart Diagnostics
                 </button>
             </div>
 
@@ -527,8 +527,8 @@
 
                     <div id="portfolio-empty" class="portfolio-empty">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
-                        <p>No active holdings</p>
-                        <span class="text-muted">Add positions above to build your dashboard</span>
+                        <p>Your portfolio is a blank slate.</p>
+                        <span class="text-muted">Add positions above to initialize real-time tracking and position-aware insights.</span>
                     </div>
                     
                     <div id="holdings-list-wrapper" class="holdings-list-wrapper" hidden>

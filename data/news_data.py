@@ -358,6 +358,102 @@ def fetch_brecorder_news(symbol: str, company_name: str = "") -> List[Dict[str, 
     return out
 
 
+def fetch_google_grounded_news(symbol: str, company_name: str = "") -> List[Dict[str, Any]]:
+    """
+    Tier 3 (new): Google Search grounding via gemini-3.1-flash-lite-preview.
+    Replaces the throttle-prone Google News RSS scrape. The model queries Google
+    directly and returns synthesized, cited news summaries as structured JSON.
+
+    Returns up to 10 news items with title, date, source, and summary.
+    Falls back to empty list on any failure.
+    """
+    if not USE_VERTEX:
+        # Grounding requires Vertex AI — skip gracefully in API-key-only mode.
+        return []
+
+    try:
+        from google import genai as _genai
+        from google.genai import types as _types
+
+        client = _genai.Client(
+            vertexai=True,
+            project=VERTEX_PROJECT,
+            location=VERTEX_LOCATION,
+        )
+
+        core_name = company_name.replace(" Limited", "").replace(" Ltd", "").strip() if company_name else symbol
+        display_name = company_name or symbol
+
+        prompt = (
+            f"Find the latest news about {display_name} ({symbol}) listed on the Pakistan Stock Exchange (PSX).\n"
+            f"Search for recent coverage about this company specifically — NOT generic Pakistan economy news.\n\n"
+            f"Focus on: financial results, earnings announcements, business developments, regulatory actions, "
+            f"mergers/acquisitions, new contracts, strategic announcements, management changes, "
+            f"capacity expansions, and any material events from the last 12 months.\n\n"
+            f"Return a JSON array of the 10 most relevant and recent news items. "
+            f"Each item MUST have exactly these keys:\n"
+            f'  - "title": the news headline\n'
+            f'  - "published": date in YYYY-MM-DD format (empty string if unknown)\n'
+            f'  - "source": the publication name\n'
+            f'  - "summary": 1-2 sentence summary of the key information\n\n'
+            f"Return ONLY the JSON array with no other text, preamble, or markdown fences."
+        )
+
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite-preview",
+            contents=prompt,
+            config=_types.GenerateContentConfig(
+                tools=[_types.Tool(google_search=_types.GoogleSearch())],
+                temperature=0.1,
+                max_output_tokens=3000,
+                # NOTE: thinking_config cannot be used with grounding
+            ),
+        )
+
+        text = response.text or ""
+
+        # Strip markdown fences if present
+        import re as _re
+        fence_match = _re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, _re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        # Also handle if the model wrapped in a single object with a key
+        text = text.strip()
+        if text.startswith("{"):
+            # Try to extract an array from inside an object
+            arr_match = _re.search(r"\[.*\]", text, _re.DOTALL)
+            if arr_match:
+                text = arr_match.group(0)
+
+        articles = json.loads(text)
+        if not isinstance(articles, list):
+            logger.warning(f"Grounded news for {symbol}: model returned non-list, skipping.")
+            return []
+
+        # Normalise each item
+        result = []
+        for item in articles:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            result.append({
+                "title": title,
+                "link": "",  # Grounded results don't expose URLs directly
+                "published": str(item.get("published") or "").strip(),
+                "source": str(item.get("source") or "Google Search").strip(),
+                "summary": str(item.get("summary") or "").strip(),
+            })
+
+        logger.info(f"Grounded Flash-Lite Tier 3: found {len(result)} articles for {symbol}")
+        return result
+
+    except Exception as exc:
+        logger.warning(f"Grounded news fetch failed for {symbol}: {exc}")
+        return []
+
+
 def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
     """
     Fetch news articles for a stock ticker from AskAnalyst endpoints (Tier 1),
@@ -449,66 +545,15 @@ def get_stock_news(symbol: str, max_articles: int = 10) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Tier 2 AskAnalyst market news failed: {e}")
         
-    # Tier 3: Google News RSS via cloudscraper. Always run — otherwise a
-    # stale-but-large AskAnalyst feed (e.g. OGDC's 2024-only company feed)
-    # crowds out fresh wire news and the result is months out of date.
-    if True:
-        # Query the COMPANY NAME, not the bare ticker. The bare ticker is
-        # ambiguous — e.g. "AGP" matches "Attorney General of Pakistan", which
-        # floods the feed with acronym noise and buries the real company news
-        # (the AGP merger was lost exactly this way). Pairing the full name with
-        # a Pakistan/PSX-scoped ticker clause keeps results on-entity.
-        if company_name:
-            core = company_name.replace(" Limited", "").replace(" Ltd", "").strip()
-            query = f'"{company_name}" OR "{core} Limited" OR ("{clean_sym}" Pakistan PSX)'
-        else:
-            query = f'"{clean_sym}" Pakistan PSX stock'
-        logger.info(f"Supplementing with Google News RSS Tier 3 (query: {query})")
-        rss_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}"
-        # news.google.com intermittently throttles the shared cloud egress IP
-        # with a transient non-200 (usually 429); retry with backoff so a single
-        # throttle doesn't leave the analysis with zero news. One success per
-        # hour is enough — the result is cached for CACHE_TTL_NEWS.
-        try:
-            import time
-            response = None
-            for _attempt in range(3):
-                response = scraper.get(rss_url, timeout=10)
-                if response.status_code == 200:
-                    break
-                logger.warning(f"Tier 3 Google News RSS for {clean_sym}: HTTP {response.status_code} on attempt {_attempt + 1}/3 (throttled?)")
-                if _attempt < 2:
-                    time.sleep(2 * (_attempt + 1))  # 2s, then 4s
-            if response is not None and response.status_code == 200:
-                root = ET.fromstring(response.content)
-                _rss_items = root.findall('./channel/item')
-                logger.info(f"Tier 3 Google News RSS for {clean_sym}: HTTP 200, {len(_rss_items)} items returned")
-                for item in _rss_items:
-                    title = item.find('title').text if item.find('title') is not None else ""
-                    link = item.find('link').text if item.find('link') is not None else ""
-                    pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
-                    source = item.find('source').text if item.find('source') is not None else "Google News"
-                    
-                    clean_title = title.strip()
-                    if not clean_title or clean_title in seen_titles:
-                        continue
-                        
-                    seen_titles.add(clean_title)
-                    published_str = pub_date
-                    try:
-                        dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %Z")
-                        published_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        pass
-                        
-                    raw_articles.append({
-                        "title": clean_title,
-                        "link": link,
-                        "published": published_str,
-                        "source": source
-                    })
-        except Exception as e:
-            logger.error(f"Tier 3 Google News RSS failed for {clean_sym}: {e}")
+    # Tier 3: Grounded Flash-Lite (replaces the throttle-prone Google News RSS).
+    # The model queries Google Search natively and returns synthesized, cited news
+    # summaries — giving us article BODY content rather than just titles, and
+    # eliminating the cloud-IP throttling that plagued the old RSS approach.
+    logger.info(f"Supplementing with Grounded Flash-Lite Tier 3 for {clean_sym}")
+    for art in fetch_google_grounded_news(clean_sym, company_name):
+        if art["title"] not in seen_titles:
+            seen_titles.add(art["title"])
+            raw_articles.append(art)
             
     # Sort newest-first so truncation keeps the LATEST news, then prefer the
     # last 12 months — falling back to the full sorted list if too few recent
