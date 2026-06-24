@@ -236,6 +236,7 @@ class FundamentalsAnalystAgent(BaseAgent):
             if shares <= 0 and price > 0 and mcap > 0:
                 shares = (mcap / price) / 1_000_000.0
 
+            ocf_val = _parse_val(financials.get('operating_cash_flow'))
             if fcf > 0 and shares > 0:
                 engine = DCFEngine(risk_free_rate=rf_rate) if rf_rate else DCFEngine()
                 # Compute book value per share for DCF sanity check.
@@ -252,41 +253,32 @@ class FundamentalsAnalystAgent(BaseAgent):
                     historical_growth=hist_growth,
                     current_price=float(price) if price else None,
                     book_value_per_share=_bvps if (_bvps and _bvps > 0) else None,
+                    operating_cash_flow=ocf_val if ocf_val else None,
                 )
-                lines.extend([
-                    "",
-                    "── AUTOMATED DCF ENGINE (FCFE) ──",
-                    f"Live inputs → Risk-free (SBP): {engine.risk_free_rate:.2%} | "
-                    f"Beta (vs KSE-100): {beta:.2f} | Historical growth (CAGR): {hist_growth:.2%} | "
-                    f"Base FCFE: {fcf:,.0f}mn | Shares: {shares:,.1f}mn",
-                    "The system has computed an intrinsic valuation based on free cash flows (FCFE).",
-                    "Review the bounded scenarios and sensitivity matrix to inform your valuation verdict.",
-                    json.dumps(dcf_results, indent=2)
-                ])
-                # ── DCF Sanity Check ──
-                # Flag any scenario where the DCF value is implausibly high.
-                # Triggered when value > 3x current price/book or 1.5x 52-wk high.
-                flagged_scenarios = [
-                    sc for sc in ("base", "bull", "bear")
-                    if isinstance(dcf_results.get(sc), dict)
-                    and dcf_results[sc].get("sanity_flag")
-                ]
-                if flagged_scenarios:
-                    ceiling = None
-                    for sc in flagged_scenarios:
-                        c = dcf_results[sc].get("sanity_ceiling")
-                        if c and (ceiling is None or c < ceiling):
-                            ceiling = c
+                if dcf_results.get("credible", True) and "error" not in dcf_results:
                     lines.extend([
                         "",
-                        "⚠ DCF SANITY WARNING — CRITICAL INSTRUCTION:",
-                        f"  Flagged scenarios: {', '.join(flagged_scenarios)}",
-                        f"  The DCF values in these scenarios exceed 3× the current price/book value"
-                        + (f" (sanity ceiling: PKR {ceiling:,.2f})." if ceiling else "."),
-                        "  These DCF values are NOT credible and MUST NOT be used as price targets.",
-                        "  You MUST discard the DCF valuation for this company and use RELATIVE",
-                        "  VALUATION instead (P/E vs peers/history, P/B vs ROE, EV/EBITDA).",
-                        "  Explicitly state in your output that the DCF was flagged as non-credible.",
+                        "── AUTOMATED DCF ENGINE (FCFE) ──",
+                        f"Live inputs → Risk-free (SBP): {engine.risk_free_rate:.2%} | "
+                        f"Beta (vs KSE-100): {beta:.2f} | Historical growth (CAGR): {hist_growth:.2%} | "
+                        f"Base FCFE: {fcf:,.0f}mn | Shares: {shares:,.1f}mn",
+                        "The system has computed an intrinsic valuation based on free cash flows (FCFE).",
+                        "Review the bounded scenarios and sensitivity matrix to inform your valuation verdict.",
+                        json.dumps(dcf_results, indent=2)
+                    ])
+                else:
+                    # DCF flagged non-credible (debt-funded FCF, or value far outside
+                    # book/price). Discard it entirely so the LLM cannot quote a phantom
+                    # intrinsic value or set a price target from it.
+                    lines.extend([
+                        "",
+                        "── AUTOMATED DCF ENGINE (FCFE) — DISCARDED ──",
+                        "[!] The DCF was flagged NON-CREDIBLE and has been discarded:",
+                        f"  {dcf_results.get('credibility_note') or 'Base value outside the plausible range.'}",
+                        "  CRITICAL: Do NOT cite any DCF intrinsic value and do NOT use one as a price",
+                        "  target. Use RELATIVE VALUATION (P/B vs ROE, P/E vs peers/history, EV/EBITDA),",
+                        "  set implied_valuation_range from those multiples, and state explicitly that",
+                        "  the DCF was non-credible for this name.",
                     ])
             else:
                 lines.extend([

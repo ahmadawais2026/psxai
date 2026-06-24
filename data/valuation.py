@@ -96,6 +96,7 @@ def compute_dcf_scenarios(
             quote = quote or get_quote(symbol) or {}
 
         fcf = _parse_val(financials.get("free_cash_flow"))
+        ocf = _parse_val(financials.get("operating_cash_flow"))
         mcap = _parse_val(fundamentals.get("market_cap"))
         price = float(quote.get("price", 0.0) or 0.0)
 
@@ -129,8 +130,14 @@ def compute_dcf_scenarios(
             historical_growth=hist_growth,
             current_price=price if price > 0 else None,
             book_value_per_share=bvps if (bvps and bvps > 0) else None,
+            operating_cash_flow=ocf if ocf else None,
         )
         if isinstance(scenarios, dict) and "error" in scenarios:
+            return None
+        # A non-credible DCF (debt-funded FCF, or value far outside book/price) is
+        # treated as not-applicable so the forecast cone / UI don't anchor to a
+        # phantom intrinsic value.
+        if isinstance(scenarios, dict) and scenarios.get("credible") is False:
             return None
         return scenarios
     except Exception as exc:
