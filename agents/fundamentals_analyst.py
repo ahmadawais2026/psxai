@@ -313,6 +313,19 @@ class FundamentalsAnalystAgent(BaseAgent):
                 "── SBP MACROECONOMIC CONTEXT ──",
             ])
             pr = macro.get("policy_rate", {})
+            # Authoritative current policy rate — accept either the nested
+            # (policy_rate.policy_rate_pct) or flat (sbp_policy_rate_pct) shape.
+            _rate = (pr.get("policy_rate_pct") if isinstance(pr, dict) else None)
+            if _rate is None:
+                _rate = macro.get("sbp_policy_rate_pct")
+            if _rate is not None:
+                _decdate = macro.get("sbp_decision_date") or (pr.get("as_of") if isinstance(pr, dict) else "")
+                lines.append(
+                    f"  AUTHORITATIVE: the CURRENT SBP policy rate is {_rate}%"
+                    + (f" (as of {_decdate})" if _decdate else "")
+                    + ". Treat this as the present rate; any broker note or recollection "
+                    "citing a different current rate is STALE history, not the current rate."
+                )
             if pr:
                 lines.append(f"  Policy Rate: {pr.get('policy_rate_pct')}% (Trend: {pr.get('trend')})")
             m2 = macro.get("m2", {})

@@ -87,31 +87,67 @@ def _fix_pdf_url(raw_url: str) -> str:
     return raw_url
 
 
+def _is_fragment_token(t: str) -> bool:
+    """A token that looks like chart-axis debris rather than a real word:
+    1-2 chars, pure digits, or a rotated tick like '-lu' / '-p'."""
+    return len(t) <= 2 or t.isdigit() or bool(re.fullmatch(r"-[A-Za-z]{1,2}", t))
+
+
+def _strip_inline_noise(line: str) -> str:
+    """Remove RUNS of fragmented tokens from within a line, keeping the prose.
+
+    pdfplumber concatenates rotated chart-axis fragments onto prose lines
+    (e.g. "...Food Inflation to remain Contained 0.0% F h o ig o h d e r in p f..."),
+    so a line-level filter alone leaves the gibberish in place. Here a maximal run
+    of >=5 consecutive fragment tokens (or any long pure-digit token) is dropped.
+    """
+    tokens = line.split()
+    n = len(tokens)
+    keep = [True] * n
+    i = 0
+    while i < n:
+        if _is_fragment_token(tokens[i]):
+            j = i
+            while j < n and _is_fragment_token(tokens[j]):
+                j += 1
+            if j - i >= 5:           # a long fragment run = chart noise
+                for k in range(i, j):
+                    keep[k] = False
+            i = j
+        else:
+            i += 1
+    # Also drop any single very-long pure-digit blob (e.g. "44444455555555555566").
+    for k, t in enumerate(tokens):
+        if t.isdigit() and len(t) >= 6:
+            keep[k] = False
+    return " ".join(t for t, kp in zip(tokens, keep) if kp)
+
+
 def _clean_extracted_text(text: str) -> str:
     """Strip chart noise that pdfplumber lifts out of embedded figures.
 
     Broker PDFs embed charts whose rotated tick labels (e.g. "-lu J -p e S -v o N",
     which is "Jul Sep Nov" rotated 90°) and data-point runs ("4 4 4 5 5 5 6 6 6")
-    extract as gibberish and get concatenated into the narrative. This drops those
-    lines while preserving genuine prose.
+    extract as gibberish. They appear both as whole junk lines AND concatenated
+    inline onto prose lines, so we strip inline fragment runs first, then drop any
+    line whose residue is still mostly noise.
     """
     kept: list[str] = []
     for line in (text or "").split("\n"):
-        stripped = line.strip()
+        stripped = _strip_inline_noise(line.strip())
+        stripped = re.sub(r"\s{2,}", " ", stripped).strip()
         if not stripped:
             continue
         tokens = stripped.split()
-        if not tokens:
-            continue
-        # Mostly-digit line → chart data points / axis values.
+        # Residue still mostly digits → chart data points / axis values.
         compact = stripped.replace(" ", "")
         if compact and sum(c.isdigit() for c in compact) / len(compact) > 0.6:
             continue
-        # Fragmented/rotated axis labels → a run of mostly 1-2 char tokens.
+        # Residue still mostly 1-2 char tokens → fragmented axis labels.
         short = sum(1 for t in tokens if len(t) <= 2)
         if len(tokens) >= 4 and short / len(tokens) > 0.6:
             continue
-        kept.append(re.sub(r"[ \t]{2,}", " ", stripped))
+        kept.append(stripped)
     return "\n".join(kept).strip()
 
 

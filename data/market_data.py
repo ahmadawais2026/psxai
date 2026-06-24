@@ -50,6 +50,7 @@ from config import (
     CACHE_TTL_FUNDAMENTALS,
     CACHE_TTL_HISTORY,
     CACHE_TTL_QUOTE,
+    FUNDAMENTALS_CACHE_VERSION,
     HISTORY_PERIOD_DAILY,
     PSX_SUFFIX,
 )
@@ -1123,7 +1124,7 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
         ``net_income``, ``book_value``, ``beta``, ``sector``, etc.
     """
     local = _local_symbol(symbol)
-    cache_key = f"fundamentals:{local}"
+    cache_key = f"fundamentals:{FUNDAMENTALS_CACHE_VERSION}:{local}"
 
     cached = get_cached(cache_key, CACHE_TTL_FUNDAMENTALS)
     if cached is not None:
@@ -1360,7 +1361,7 @@ def get_financial_statements(symbol: str) -> Dict[str, Any]:
         dicts of ``{date_str: value}``.
     """
     local = _local_symbol(symbol)
-    cache_key = f"financials:{local}"
+    cache_key = f"financials:{FUNDAMENTALS_CACHE_VERSION}:{local}"
 
     cached = get_cached(cache_key, CACHE_TTL_FUNDAMENTALS)
     if cached is not None:
@@ -1448,34 +1449,41 @@ def get_financial_statements(symbol: str) -> Dict[str, Any]:
         bs_raw = fetch_statement_data("bss", ask_id, "annual")
         cf_raw = fetch_cash_flow(ask_id)
         
-        def _parse_to_dict(raw_data, is_cf=False):
+        def _parse_to_rows(raw_data, is_cf=False):
+            """Return statements as a LIST OF ROWS [{Metric, '2025':v, ...}].
+
+            This MUST match the Firestore branch's shape: the PDF renderer
+            (`_parse_fs_rows`) and the highlights parser both expect a list of
+            row dicts, not a column-major dict — returning a dict here silently
+            blanks the income-statement / balance-sheet tables.
+            """
             if not raw_data:
-                return {}
+                return []
             df = parse_cash_flow_json(raw_data) if is_cf else parse_statement_json(raw_data)
             if df is None or df.empty:
-                return {}
-            res = {}
+                return []
             date_cols = [c for c in df.columns if c not in ["Metric", "Unit"]]
-            for col in date_cols:
-                res[str(col)] = {}
-                for _, row in df.iterrows():
-                    val = row[col]
+            rows = []
+            for _, r in df.iterrows():
+                row = {"Metric": str(r.get("Metric", "")).strip()}
+                for col in date_cols:
+                    val = r[col]
                     try:
-                        if pd.notna(val):
-                            res[str(col)][str(row["Metric"])] = float(val)
-                    except:
-                        pass
-            return res
-            
+                        row[str(col)] = float(val) if pd.notna(val) else None
+                    except Exception:
+                        row[str(col)] = None
+                rows.append(row)
+            return rows
+
         statements = {
             "symbol":           local,
-            "income_statement": _parse_to_dict(is_raw),
-            "balance_sheet":    _parse_to_dict(bs_raw),
-            "cash_flow":        _parse_to_dict(cf_raw, is_cf=True)
+            "income_statement": _parse_to_rows(is_raw),
+            "balance_sheet":    _parse_to_rows(bs_raw),
+            "cash_flow":        _parse_to_rows(cf_raw, is_cf=True)
         }
-        
-        # Parse highlights
-        highlights = _parse_firestore_financials_to_highlights(statements, local)
+
+        # Parse highlights (annual-only data; quarter doc absent in this path).
+        highlights = _compute_ttm_highlights(statements, {}, local)
         statements.update(highlights)
         
         set_cached(cache_key, statements)
@@ -1500,7 +1508,7 @@ def get_valuation_ratios(symbol: str) -> Dict[str, Any]:
     Returns empty dict on failure.
     """
     local = _local_symbol(symbol)
-    cache_key = f"ratios:{local}"
+    cache_key = f"ratios:{FUNDAMENTALS_CACHE_VERSION}:{local}"
     cached = get_cached(cache_key, CACHE_TTL_FUNDAMENTALS)
     if cached is not None:
         return cached
