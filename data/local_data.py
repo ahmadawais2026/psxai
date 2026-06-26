@@ -283,11 +283,18 @@ def get_research_reports(ticker: str, sector: Optional[str] = None,
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
+    from data.text_cleaning import clean_extracted_text
+
     reports: List[str] = []
     for _, md_file in scored[:max_reports]:
         try:
             content = md_file.read_text(encoding="utf-8", errors="ignore").strip()
             if content:
+                # Clean at READ time too: a stale/garbled .md bundled with the
+                # deployed function still gets its chart-debris stripped here, so
+                # the excerpt reaching the prompt/PDF is readable regardless of
+                # which .md version shipped.
+                content = clean_extracted_text(content)
                 reports.append(f"=== {md_file.stem} ===\n{content[:2500]}")
         except Exception as e:
             logger.warning("Could not read %s: %s", md_file.name, e)
