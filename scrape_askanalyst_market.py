@@ -41,9 +41,10 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Zakheera Credentials
-ZAKHEERA_USER = "hello@finqalab.com"
-ZAKHEERA_PASS = "kDv7y1#w"
+# Zakheera Credentials — supplied via environment variables, never hardcoded.
+# Set ZAKHEERA_USER and ZAKHEERA_PASS in your .env / shell before running.
+ZAKHEERA_USER = os.environ.get("ZAKHEERA_USER", "")
+ZAKHEERA_PASS = os.environ.get("ZAKHEERA_PASS", "")
 
 
 
@@ -503,6 +504,10 @@ def fetch_macro_indicators():
     session = requests.Session()
     session.verify = False
     
+    if not ZAKHEERA_USER or not ZAKHEERA_PASS:
+        print("  [-] Error: ZAKHEERA_USER / ZAKHEERA_PASS environment variables are not set.")
+        return
+
     try:
         # Step 1: Authenticate to Zakheera
         print("  [~] Logging in to Zakheera.com...")
