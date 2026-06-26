@@ -31,3 +31,4 @@ scratch/
 scrape_zakheera_financials.py
 beautiful_financials/
 .firebase/
+logs.txt

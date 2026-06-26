@@ -794,12 +794,42 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
             story.append(t)
         story.append(Spacer(1, 0.3 * cm))
     else:
-        story.append(Paragraph("Income Statement", st["sub"]))
-        story.append(Paragraph(
-            "(Income statement data not available for this company.)",
-            st["italic"],
-        ))
-        story.append(Spacer(1, 0.15 * cm))
+        # Fallback: the full statement rows didn't render for this ticker, but the
+        # TTM/latest highlights are usually present — show a compact key-figures
+        # table instead of a bare "not available".
+        def _mn(v):
+            return _fmt_mn(v) if v not in (None, "", 0) else None
+
+        def _mpct(v):
+            try:
+                return f"{float(v):.2f}%" if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        _eps = fs.get("eps")
+        _kf = [(k, v) for k, v in [
+            ("Revenue",             _mn(fs.get("revenue"))),
+            ("Net Income",          _mn(fs.get("net_income"))),
+            ("Operating Margin",    _mpct(fs.get("operating_margin"))),
+            ("Net Margin",          _mpct(fs.get("net_margin"))),
+            ("Operating Cash Flow", _mn(fs.get("operating_cash_flow"))),
+            ("Free Cash Flow",      _mn(fs.get("free_cash_flow"))),
+            ("EPS", (f"PKR {float(_eps):.2f}" if _eps not in (None, "", 0) else None)),
+        ] if v]
+        if _kf:
+            _plabel = fs.get("period_label") or "Latest"
+            story.append(Paragraph(f"Income Statement - Key Figures ({_plabel}, PKR mn)", st["sub"]))
+            kf_tbl = _ratios_table(_kf, dw)
+            if kf_tbl:
+                story.append(kf_tbl)
+            story.append(Spacer(1, 0.3 * cm))
+        else:
+            story.append(Paragraph("Income Statement", st["sub"]))
+            story.append(Paragraph(
+                "(Income statement data not available for this company.)",
+                st["italic"],
+            ))
+            story.append(Spacer(1, 0.15 * cm))
 
     bs_rows = fs.get("balance_sheet") or fs.get("balance sheet") or []
     hdr, data = _parse_fs_rows(bs_rows, _BS_KW, n_periods=7)

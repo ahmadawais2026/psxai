@@ -1,0 +1,57 @@
+# .gcloudignore — controls what ships in the Cloud Function bundle.
+#
+# IMPORTANT: when this file exists, gcloud/Firebase use it INSTEAD of falling
+# back to .gitignore. .gitignore ignores the whole `market_data/` tree, which
+# silently excluded the runtime data (broker briefings, macro, news, sectors)
+# from every deploy and froze production on a stale snapshot. We deliberately
+# do NOT exclude `market_data/` here so that the runtime data — most importantly
+# the cleaned broker `*.md` files in market_data/briefings/extracted/ — ships.
+
+# ── Version control / tooling ──
+.git/
+.gitignore
+.github/
+.claude/
+*.md.bak
+
+# ── Python build / venv / caches ──
+venv/
+.venv/
+env/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node (frontend tooling, not needed by the Python function) ──
+node_modules/
+
+# ── Secrets & local state (never ship) ──
+.env
+.env.*
+*-adminsdk-*.json
+*.db
+
+# ── Logs / scratch / one-off artifacts ──
+*.log
+logs.txt
+scratch/
+scratch_*.py
+test_pdfs/
+*.docx
+
+# ── Heavy, non-runtime data (the runtime reads only the extracted .md) ──
+# Raw downloaded broker PDFs (~24M) and catalogs are NOT read at runtime.
+market_data/briefings/pdfs/
+market_data/briefings/catalogs/
+market_data/briefings/**/*.bak
+**/extracted.bak/
+**/extracted.bak2/
+*.bak
+
+# NOTE: market_data/ itself is intentionally INCLUDED (not listed above), so
+# market_data/briefings/extracted/*.md, macroeconomics/, news/, and sectors/
+# ship with the function.

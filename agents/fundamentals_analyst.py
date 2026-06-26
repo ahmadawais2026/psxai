@@ -207,9 +207,14 @@ class FundamentalsAnalystAgent(BaseAgent):
             # value already in the shared macro snapshot, else a direct fetch.
             rf_rate = None
             macro = context.get("macro_context") or {}
+            # Prefer the FRESH market-context policy rate (same source as the
+            # live-macro preamble) so the DCF cost of equity isn't built off the
+            # stale cached snapshot rate.
+            _mkt_macro_rf = (context.get("market_context") or {}).get("macro") or {}
             rf_candidate = macro.get("risk_free_rate")
             if rf_candidate is None:
-                pr = macro.get("policy_rate_pct")
+                pr = (_mkt_macro_rf.get("sbp_policy_rate_pct")
+                      or macro.get("policy_rate_pct"))
                 if pr is not None:
                     try:
                         pr = float(pr)
@@ -305,21 +310,30 @@ class FundamentalsAnalystAgent(BaseAgent):
                 "── SBP MACROECONOMIC CONTEXT ──",
             ])
             pr = macro.get("policy_rate", {})
-            # Authoritative current policy rate — accept either the nested
-            # (policy_rate.policy_rate_pct) or flat (sbp_policy_rate_pct) shape.
-            _rate = (pr.get("policy_rate_pct") if isinstance(pr, dict) else None)
+            # Authoritative CURRENT policy rate — PREFER the fresh market-context
+            # macro (the same source as the report's live-macro preamble, e.g.
+            # 11.5%) over the macro_context snapshot, whose Firestore-cached
+            # `sbp:policy_rate` can be stale (it served 10.5% post-April-hike).
+            _mkt_macro = (context.get("market_context") or {}).get("macro") or {}
+            _rate = _mkt_macro.get("sbp_policy_rate_pct")
+            if _rate is None:
+                _rate = (pr.get("policy_rate_pct") if isinstance(pr, dict) else None)
             if _rate is None:
                 _rate = macro.get("sbp_policy_rate_pct")
             if _rate is not None:
-                _decdate = macro.get("sbp_decision_date") or (pr.get("as_of") if isinstance(pr, dict) else "")
+                _decdate = (_mkt_macro.get("sbp_decision_date")
+                            or macro.get("sbp_decision_date")
+                            or (pr.get("as_of") if isinstance(pr, dict) else ""))
                 lines.append(
                     f"  AUTHORITATIVE: the CURRENT SBP policy rate is {_rate}%"
                     + (f" (as of {_decdate})" if _decdate else "")
                     + ". Treat this as the present rate; any broker note or recollection "
                     "citing a different current rate is STALE history, not the current rate."
                 )
-            if pr:
-                lines.append(f"  Policy Rate: {pr.get('policy_rate_pct')}% (Trend: {pr.get('trend')})")
+            # Only show the trend here — never re-print a (possibly stale) rate that
+            # could contradict the authoritative line above.
+            if isinstance(pr, dict) and pr.get("trend"):
+                lines.append(f"  Policy Rate Trend: {pr.get('trend')}")
             m2 = macro.get("m2", {})
             if m2:
                 lines.append(f"  Broad Money M2 (PKR Bn): {m2.get('m2_pkr_bn')} (Growth: {m2.get('growth_pct')}%)")
