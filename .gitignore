@@ -25,7 +25,17 @@ market_intelligence/
 
 # Scratch and agent working files
 scratch/
+scratch_*.py
 .agents/
+.firecrawl/
+
+# Generated reports, scraped content, and test artifacts (not source)
+test_report*.pdf
+test_pdfs/
+otsu_analysis.json
+PSX_Analysis_OTSU_*.pdf
+agp_firecrawl.md
+news_content_review*.docx
 
 # Personal-use scripts — not for GitHub
 scrape_zakheera_financials.py
