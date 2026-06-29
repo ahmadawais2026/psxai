@@ -113,44 +113,35 @@ body {
 .bg-orb {
     position: absolute;
     border-radius: 50%;
-    filter: blur(120px);
     opacity: 0.12;
-    animation: orbFloat 25s ease-in-out infinite;
+    /* Soft glow via radial-gradient instead of an expensive blur() filter.
+       No animation: a continuously animating blur layer is the single biggest
+       idle GPU cost and forces every backdrop-filter to re-rasterize each frame. */
 }
 
 .bg-orb--emerald {
     width: 600px;
     height: 600px;
-    background: var(--bullish);
+    background: radial-gradient(circle, var(--bullish), transparent 70%);
     top: -10%;
     right: -5%;
-    animation-delay: 0s;
 }
 
 .bg-orb--cyan {
     width: 500px;
     height: 500px;
-    background: var(--accent-end);
+    background: radial-gradient(circle, var(--accent-end), transparent 70%);
     bottom: -10%;
     left: -5%;
-    animation-delay: -8s;
 }
 
 .bg-orb--purple {
     width: 400px;
     height: 400px;
-    background: #d97706; /* Warm amber */
+    background: radial-gradient(circle, #d97706, transparent 70%); /* Warm amber */
     top: 50%;
     left: 40%;
-    animation-delay: -16s;
     opacity: 0.05;
-}
-
-@keyframes orbFloat {
-    0%, 100% { transform: translate(0, 0) scale(1); }
-    25%      { transform: translate(30px, -40px) scale(1.05); }
-    50%      { transform: translate(-20px, 20px) scale(0.95); }
-    75%      { transform: translate(15px, 35px) scale(1.02); }
 }
 
 
@@ -166,8 +157,8 @@ body {
 /* ─── Glass Card Mixin ────────────────────────────────────────── */
 .glass-card {
     background: var(--bg-surface);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-card);
@@ -205,9 +196,9 @@ body {
     position: sticky;
     top: 0;
     z-index: var(--z-header);
-    background: rgba(6, 6, 11, 0.75);
-    backdrop-filter: blur(16px) saturate(180%);
-    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    background: rgba(6, 6, 11, 0.88);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -432,8 +423,8 @@ body {
     display: flex;
     align-items: center;
     background: var(--bg-surface);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-card);
     padding: 6px 6px 6px 18px;
@@ -691,7 +682,8 @@ body {
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-card);
-    backdrop-filter: blur(12px);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
 }
 
 .agent-status-bar[hidden] { display: none; }
@@ -1526,9 +1518,9 @@ body {
     padding: 28px;
     border-radius: 0;
     border-left: 1px solid var(--border-default);
-    background: rgba(12, 12, 20, 0.95);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
+    background: rgba(12, 12, 20, 0.97);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
     display: flex;
     flex-direction: column;
@@ -2136,7 +2128,6 @@ body {
 
 [data-theme="light"] .bg-orb {
     opacity: 0.04;
-    filter: blur(140px);
 }
 
 [data-theme="light"] .bg-orb--purple {
@@ -2295,8 +2286,12 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
     .agent-card.just-updated { animation: none; }
     .animate-in { animation: none; opacity: 1; transform: none; }
+    .skeleton,
+    .loading-dots span,
+    .agent-step[data-status="working"] .step-dot { animation: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
