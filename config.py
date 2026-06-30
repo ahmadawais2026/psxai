@@ -152,7 +152,7 @@ CACHE_TTL_NEWS = 60 * 60          # 1 hour
 # Bump this whenever the SHAPE or COMPUTATION of cached fundamentals/financials
 # changes, so a deploy invalidates stale entries instead of serving 24h-old data
 # computed by the previous code (e.g. the ROE/D&E ×100 fix and the TTM rewrite).
-FUNDAMENTALS_CACHE_VERSION = "v2"
+FUNDAMENTALS_CACHE_VERSION = "v3"
 
 # ── PSX Configuration ────────────────────────────────────────
 PSX_SUFFIX = ".KA"                # Yahoo Finance suffix for Karachi Stock Exchange

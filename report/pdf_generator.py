@@ -873,7 +873,7 @@ def generate_pdf(report: Dict[str, Any]) -> bytes:
         ("P/E Ratio",        f"{float(pe):.1f}x" if pe   else "-"),
         ("P/B Ratio",        f"{float(pb):.2f}x" if pb   else "-"),
         ("EV/EBITDA",        _rx(funda.get("ev_to_ebitda"))),
-        (f"EPS ({funda.get('period_label') or 'Latest'})", f"PKR {float(eps):.2f}" if eps else "-"),
+        (f"EPS ({funda.get('eps_period') or funda.get('period_label') or 'Latest'})", f"PKR {float(eps):.2f}" if eps else "-"),
         ("ROE",              _pct(roe) if roe else "-"),
         ("ROA",              _pct(funda.get("roa")) if funda.get("roa") else "-"),
         ("Profit Margin",    _pct(funda.get("profit_margin"))),

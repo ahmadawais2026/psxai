@@ -129,6 +129,11 @@ class FundamentalsAnalystAgent(BaseAgent):
         except (TypeError, ValueError):
             _equity_str = "N/A"
 
+        # Basis period for the trailing P/E / EPS (full-year: 'TTM' or e.g. 'FY25').
+        _eps_period = fundamentals.get('eps_period') or financials.get('period_label') or 'Latest'
+        _pe = fundamentals.get('pe_ratio')
+        _de = fundamentals.get('debt_to_equity')
+
         lines = [
             f"SYMBOL: {symbol}",
             f"COMPANY NAME: {fundamentals.get('name', symbol)}",
@@ -137,13 +142,23 @@ class FundamentalsAnalystAgent(BaseAgent):
             f"MARKET CAP: {fundamentals.get('market_cap', 'N/A')}",
             "",
             "── KEY VALUATION & EFFICIENCY METRICS ──",
-            f"  Trailing P/E: {fundamentals.get('pe_ratio', 'N/A')}",
+            f"  Trailing P/E ({_eps_period} basis): {_pe if _pe is not None else 'N/A'}",
             f"  Price to Book (P/B): {fundamentals.get('pb_ratio', 'N/A')}",
             f"  Return on Equity (ROE): {_fmt_pct_frac(fundamentals.get('roe'))}",
-            f"  Earnings Per Share (EPS): {fundamentals.get('eps', 'N/A')}",
+            f"  Earnings Per Share (EPS, {_eps_period}): {fundamentals.get('eps', 'N/A')}",
             f"  Dividend Yield: {fundamentals.get('dividend_yield', 'N/A')}",
-            f"  Debt to Equity: {_fmt_multiple(fundamentals.get('debt_to_equity'))}",
+            f"  Debt to Equity: {_fmt_multiple(_de)}",
             f"  Beta: {fundamentals.get('beta', 'N/A')}",
+            "",
+            "  NOTES ON THE METRICS ABOVE:",
+            "  • Trailing P/E and EPS are on a FULL-YEAR basis (TTM or the latest "
+            "annual year), NOT a single quarter. If P/E is N/A, the company has no "
+            "positive trailing earnings — do NOT describe it as 'overvalued on P/E'; "
+            "value it on P/B / EV-EBITDA / asset basis instead.",
+            "  • Debt to Equity here uses INTEREST-BEARING DEBT (borrowings) only. "
+            "N/A means borrowings could not be isolated from the filings — in that "
+            "case do NOT treat total liabilities or trade/circular-debt payables as "
+            "leverage, and do not invent a debt-to-equity number.",
             "",
         ]
 

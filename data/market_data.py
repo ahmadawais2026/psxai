@@ -399,6 +399,22 @@ def _compute_ttm_highlights(
                 return clean_val(row.get(col_key))
         return 0.0
 
+    def sum_col(rows, synonyms, col_key):
+        """Sum a metric across ALL matching rows of a column.
+
+        Unlike get_col (first match only), this adds every row whose Metric
+        contains any synonym — needed for interest-bearing debt, which is filed
+        as several separate line items (long-term financing, current portion of
+        long-term financing, short-term borrowings, lease liabilities, …). Each
+        row is counted once even if it matches multiple synonyms.
+        """
+        total = 0.0
+        for row in rows:
+            name = row.get("Metric", "").strip()
+            if any(syn.lower() in name.lower() for syn in synonyms):
+                total += clean_val(row.get(col_key))
+        return total
+
     # ── 1. Parse period keys from both docs ───────────────────────────────────
     annual_periods = _collect_period_keys(annual_data.get("income_statement", []))
     if not annual_periods:
@@ -463,6 +479,15 @@ def _compute_ttm_highlights(
     BS_LIAB   = ["total liabilities - total liabilities", "total liabilities", "total liability"]
     BS_CASH   = ["cash & bank balances", "cash and balances with treasury banks", "cash and cash equivalents"]
     BS_PUC    = ["equity - paid-up capital", "paid-up capital", "paid up capital", "share capital"]
+    # Interest-bearing debt only (NOT trade/gas-supplier payables, which dominate
+    # a utility's total liabilities and would inflate D/E). Synonyms are kept
+    # non-overlapping so sum_col counts each filed line item once.
+    BS_LTB    = ["long term financing", "long-term financing", "long term loans",
+                 "long term borrowings", "long-term borrowings",
+                 "lease liabilities against right-of-use",
+                 "liabilities against assets subject to finance lease"]
+    BS_STB    = ["short term borrowings", "short-term borrowings", "short term finance",
+                 "current portion of long term", "current maturity of long term"]
     CF_OCF    = ["operating cash flow", "net cash generated from operating activities", "cash flow from operating activities"]
     CF_FCFE   = ["fcfe"]
     CF_FCFF   = ["fcff"]
@@ -537,8 +562,12 @@ def _compute_ttm_highlights(
         total_liabilities = get_col(bs_rows, BS_LIAB, bs_col)
         cash              = get_col(bs_rows, BS_CASH, bs_col)
         paid_up_capital   = get_col(bs_rows, BS_PUC,  bs_col)
+        # Interest-bearing debt (summed across line items). 0.0 means the
+        # borrowing rows could not be isolated → D/E is left N/A downstream
+        # rather than falling back to the payables-inflated total liabilities.
+        total_debt        = sum_col(bs_rows, BS_LTB, bs_col) + sum_col(bs_rows, BS_STB, bs_col)
     else:
-        total_assets = total_liabilities = cash = paid_up_capital = 0.0
+        total_assets = total_liabilities = cash = paid_up_capital = total_debt = 0.0
 
     # ── 6. Cash flow: prefer annual (most complete); fall back to quarter ─────
     # AskAnalyst only serves cash flow at annual cadence, so quarter CF is often empty.
@@ -564,6 +593,19 @@ def _compute_ttm_highlights(
 
     roe          = None  # computed upstream in get_fundamentals from equity
     dividend_yield = None  # quarterly docs often lack this
+
+    # ── 7b. Full-year (annual) earnings basis ─────────────────────────────────
+    # Always surface the latest full-year figures (independent of the headline
+    # period, which may be a partial interim). get_fundamentals uses these for
+    # the trailing P/E and ROE when a true TTM was not stitched, so a single
+    # positive quarter can never masquerade as full-year profitability.
+    if latest_annual_col is not None:
+        annual_revenue    = get_col(ann_rows_is, REV_SYNS, latest_annual_col)
+        annual_net_income = get_col(ann_rows_is, NI_SYNS,  latest_annual_col)
+        annual_eps        = get_col(ann_rows_is, EPS_SYNS, latest_annual_col)
+    else:
+        annual_revenue = annual_net_income = annual_eps = 0.0
+    earnings_is_ttm = (period_label == "TTM")
 
     # Latest interim headline for the report (always surface most recent result)
     if latest_interim_col and q_rows_is:
@@ -596,6 +638,12 @@ def _compute_ttm_highlights(
         "roe":                     roe,
         "dividend_yield":          dividend_yield,
         "paid_up_capital":         paid_up_capital,
+        "total_debt":              total_debt,
+        "annual_revenue":          annual_revenue,
+        "annual_net_income":       annual_net_income,
+        "annual_eps":              annual_eps,
+        "annual_period_label":     latest_annual_col,
+        "earnings_is_ttm":         earnings_is_ttm,
     }
 
 
@@ -1149,9 +1197,18 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 quote = get_quote(symbol) or {}
                 price = quote.get("price", 0.0)
                 
-                eps = highlights.get("eps", 0.0)
-                pe_ratio = (price / eps) if eps > 0 else None
-                
+                # Trailing P/E must use a FULL-YEAR earnings basis: the stitched
+                # TTM when available, otherwise the latest annual EPS. Never
+                # price ÷ a single interim quarter (that mixes a 12-month price
+                # with partial-year earnings and can show a positive multiple for
+                # a stock that is loss-making over the full year). Non-positive
+                # full-year EPS → P/E = N/A, matching the PSX portal.
+                earnings_is_ttm = bool(highlights.get("earnings_is_ttm"))
+                val_eps = highlights.get("eps", 0.0) if earnings_is_ttm else highlights.get("annual_eps", 0.0)
+                eps_period = "TTM" if earnings_is_ttm else (highlights.get("annual_period_label") or "Latest")
+                pe_ratio = (price / val_eps) if (val_eps and val_eps > 0) else None
+                eps = val_eps
+
                 total_assets = highlights.get("total_assets", 0.0)
                 total_liabilities = highlights.get("total_liabilities", 0.0)
                 equity = total_assets - total_liabilities
@@ -1201,16 +1258,25 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                     market_cap = price * shares_outstanding * 1_000_000.0
 
                 # ROE as a FRACTION (0.15 == 15%); _pct() and the analyst
-                # data-blob format it to a percent at the edge.
+                # data-blob format it to a percent at the edge. Computed on the
+                # same full-year basis as P/E (TTM or annual net income), never a
+                # single positive quarter. A negative ROE is allowed — it is the
+                # honest signal that the company is loss-making over the year.
                 roe = highlights.get("roe")
                 if roe is None and equity > 0:
-                    roe = highlights.get("net_income", 0.0) / equity
+                    roe_ni = highlights.get("net_income", 0.0) if earnings_is_ttm else highlights.get("annual_net_income", 0.0)
+                    roe = roe_ni / equity
                 roe = _roe_to_fraction(roe)
 
-                # Debt/Equity as a plain MULTIPLE (2.74 == 2.74x), not a percent.
+                # Debt/Equity as a plain MULTIPLE (2.74 == 2.74x), using only
+                # interest-bearing debt (borrowings). When borrowings cannot be
+                # isolated (total_debt == 0), leave it N/A rather than fall back
+                # to total liabilities, which for a utility is dominated by
+                # gas-supplier payables and would massively inflate the ratio.
+                total_debt = highlights.get("total_debt", 0.0) or 0.0
                 debt_equity = None
-                if equity > 0:
-                    debt_equity = total_liabilities / equity
+                if total_debt > 0 and equity > 0:
+                    debt_equity = total_debt / equity
                 
                 fundamentals = {
                     "symbol":               local,
@@ -1220,6 +1286,7 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                     "pb_ratio":             pb_ratio,
                     "roe":                  roe,
                     "eps":                  eps,
+                    "eps_period":           eps_period,
                     "dividend_yield":       highlights.get("dividend_yield"),
                     "debt_to_equity":       debt_equity,
                     "revenue":              highlights.get("revenue"),
@@ -1272,7 +1339,7 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 pe_ratio = float(pe_val) if pe_val and pe_val != "None" else None
                 pb_ratio = float(pb_val) if pb_val and pb_val != "None" else None
                 dividend_yield = float(dy_val) if dy_val and dy_val != "None" else None
-                
+
                 # Enrich with /api/ratios and /api/equity-profile
                 ratios = get_valuation_ratios(local)
                 equity_prof = get_equity_profile(local)
@@ -1284,12 +1351,22 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 ev_ebitda = ratios.get("ev_ebitda")
                 free_float_pct = equity_prof.get("free_float_pct")
 
+                # Resolve a trailing P/E only when earnings are positive. Vendor
+                # feeds occasionally still return a positive P/E for a loss-making
+                # stock; a non-positive EPS means there is no meaningful multiple.
+                pe_final = pe_ratio if (pe_ratio and pe_ratio > 0) else None
+                if pe_final is None:
+                    _pe_alt = ratios.get("pe")
+                    pe_final = float(_pe_alt) if (_pe_alt and float(_pe_alt) > 0) else None
+                if eps is not None and eps <= 0:
+                    pe_final = None
+
                 fundamentals = {
                     "symbol":               local,
                     "name":                 name,
                     "sector":               sector,
                     "industry":             "N/A",
-                    "pe_ratio":             pe_ratio or ratios.get("pe"),
+                    "pe_ratio":             pe_final,
                     "pb_ratio":             pb_ratio or ratios.get("pb"),
                     "dividend_yield":       dividend_yield or ratios.get("dividend_yield"),
                     "ev_ebitda":            ev_ebitda,
@@ -1309,8 +1386,8 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
                 quote = get_quote(symbol) or {}
                 price = quote.get("price", 0.0)
                 if price > 0:
-                    if pe_ratio and pe_ratio > 0:
-                        fundamentals["eps"] = price / pe_ratio
+                    if pe_final and pe_final > 0:
+                        fundamentals["eps"] = price / pe_final
                     if pb_ratio and pb_ratio > 0:
                         fundamentals["book_value"] = price / pb_ratio
                 
